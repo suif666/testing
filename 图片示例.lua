@@ -22,7 +22,7 @@ end
 -- ==================== 自定义图标 ====================
 -- 注册一个名为 mypack 的图标包，之后用 "mypack:图标名" 引用
 WindUI.Creator.AddIcons("mypack", {
-    sword = "rbxassetid://替换成你的图片id",     -- 单张图片当图标
+    sword = "rbxassetid://80369590845546",       -- 单张图片当图标
     gem = 1234567890,                             -- 传数字 id 也可以
     -- 图集（雪碧图）里的某一个图标：
     -- sprite = {
@@ -54,7 +54,7 @@ demoTab:Select()
 local imgSec = demoTab:Section({ Title = "直接放图片", Icon = "folder", Opened = true })
 
 imgSec:Image({
-    Image = "rbxassetid://98093838929744", -- rbxassetid / rbxthumb 链接都行
+    Image = "rbxassetid://80369590845546", -- rbxassetid / rbxthumb 链接都行
     AspectRatio = "16:9",                    -- 或数字 1.777
     Radius = 8,                              -- 圆角
 })
@@ -82,7 +82,7 @@ iconSec:Toggle({
 
 WindUI:Notify({
     Title = "图片/图标示例",
-    Content = "记得把示例里的 rbxassetid 换成你自己的图片",
+    Content = "图片 ID 80369590845546 已配置",
     Icon = "aperture",
     Duration = 5,
 })
