@@ -54,7 +54,7 @@ demoTab:Select()
 local imgSec = demoTab:Section({ Title = "直接放图片", Icon = "folder", Opened = true })
 
 imgSec:Image({
-    Image = "rbxassetid://替换成你的图片id", -- rbxassetid / rbxthumb 链接都行
+    Image = "rbxassetid://98093838929744", -- rbxassetid / rbxthumb 链接都行
     AspectRatio = "16:9",                    -- 或数字 1.777
     Radius = 8,                              -- 圆角
 })
