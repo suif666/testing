@@ -53,11 +53,19 @@ demoTab:Select()
 -- ==================== 右侧内容区放图片 ====================
 local imgSec = demoTab:Section({ Title = "直接放图片", Icon = "folder", Opened = true })
 
-imgSec:Image({
-    Image = "rbxassetid://80369590845546", -- rbxassetid / rbxthumb 链接都行
-    AspectRatio = "16:9",                    -- 或数字 1.777
-    Radius = 8,                              -- 圆角
+imgSec:Paragraph({
+    Title = "图片",
+    Desc = "下面用原始 ImageLabel 显示（兼容 Delta）",
 })
+
+-- 直接把 ImageLabel 放进分组的元素容器，绕过 Image 元素的高度问题
+local rawImg = Instance.new("ImageLabel")
+rawImg.Name = "CustomImage"
+rawImg.Image = "rbxassetid://80369590845546"
+rawImg.BackgroundTransparency = 1
+rawImg.Size = UDim2.new(1, 0, 0, 200)   -- 宽度自动占满，高度自己调
+rawImg.ScaleType = Enum.ScaleType.Fit   -- Fit: 完整显示不变形; Crop: 铺满裁切
+rawImg.Parent = imgSec.ElementFrame.Outline.Content
 
 -- ==================== 用自定义图标 ====================
 local iconSec = demoTab:Section({ Title = "自定义图标", Icon = "folder", Opened = true })
@@ -82,7 +90,7 @@ iconSec:Toggle({
 
 WindUI:Notify({
     Title = "图片/图标示例",
-    Content = "图片 ID 80369590845546 已配置",
+    Content = "图片用 ImageLabel 直挂显示，高度 200",
     Icon = "aperture",
     Duration = 5,
 })
