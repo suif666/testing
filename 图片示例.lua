@@ -1,5 +1,5 @@
--- WindUI 图片 + 自定义图标示例
--- 用法：复制进注入器执行，先登录 Roblox 并把下面的 asset id 换成你自己上传的图片
+-- 黑白脚本群卡片示例（WindUI + 直挂 GuiObject，兼容 Delta）
+-- 布局：头像+群名 -> 提示小字 -> 复制按钮，垂直居中排列
 
 local WindUI
 do
@@ -19,24 +19,13 @@ do
     WindUI = res
 end
 
--- ==================== 自定义图标 ====================
--- 注册一个名为 mypack 的图标包，之后用 "mypack:图标名" 引用
-WindUI.Creator.AddIcons("mypack", {
-    sword = "rbxassetid://80369590845546",       -- 单张图片当图标
-    gem = 1234567890,                             -- 传数字 id 也可以
-    -- 图集（雪碧图）里的某一个图标：
-    -- sprite = {
-    --     Image = "rbxassetid://图集id",
-    --     ImageRectSize = Vector2.new(24, 24),
-    --     ImageRectPosition = Vector2.new(0, 0),
-    -- },
-})
+local QQ群号 = "1062578052" -- 黑白脚本群群号，改成你自己的
 
 local win = WindUI:CreateWindow({
-    Title = "图片/图标示例",
+    Title = "群组卡片示例",
     Icon = "aperture",
     Author = "demo",
-    Folder = "ImageDemo",
+    Folder = "GroupCardDemo",
     Size = UDim2.fromOffset(620, 460),
     Resizable = true,
     Transparent = true,
@@ -45,52 +34,110 @@ local win = WindUI:CreateWindow({
     NewElements = true,
 })
 
-local demoSection = win:Section({ Title = "图片演示", Icon = "folder", Opened = true })
-local demoTab = demoSection:Tab({ Title = "内容", Icon = "image" })
+local mainSec = win:Section({ Title = "群组", Icon = "folder", Opened = true })
+local cardTab = mainSec:Tab({ Title = "卡片", Icon = "gem" })
+cardTab:Select()
 
-demoTab:Select()
+local cardSec = cardTab:Section({ Title = "黑白脚本群", Icon = "folder", Opened = true })
+cardSec:Paragraph({ Title = "预览", Desc = "下面是自定义卡片（直挂 GuiObject）" })
 
--- ==================== 右侧内容区放图片 ====================
-local imgSec = demoTab:Section({ Title = "直接放图片", Icon = "folder", Opened = true })
+-- 分组元素容器：直挂自定义 UI 的入口
+local content = cardSec.ElementFrame.Outline.Content
 
-imgSec:Paragraph({
-    Title = "图片",
-    Desc = "下面用原始 ImageLabel 显示（兼容 Delta）",
-})
+-- ==================== 卡片本体 ====================
+local card = Instance.new("Frame")
+card.Name = "GroupCard"
+card.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+card.BackgroundTransparency = 0.2
+card.Size = UDim2.new(1, -24, 0, 150)
+card.Parent = content
 
--- 直接把 ImageLabel 放进分组的元素容器，绕过 Image 元素的高度问题
-local rawImg = Instance.new("ImageLabel")
-rawImg.Name = "CustomImage"
-rawImg.Image = "rbxassetid://80369590845546"
-rawImg.BackgroundTransparency = 1
-rawImg.Size = UDim2.new(1, 0, 0, 200)   -- 宽度自动占满，高度自己调
-rawImg.ScaleType = Enum.ScaleType.Fit   -- Fit: 完整显示不变形; Crop: 铺满裁切
-rawImg.Parent = imgSec.ElementFrame.Outline.Content
+local cardList = Instance.new("UIListLayout")
+cardList.FillDirection = Enum.FillDirection.Vertical
+cardList.HorizontalAlignment = Enum.HorizontalAlignment.Center
+cardList.VerticalAlignment = Enum.VerticalAlignment.Center
+cardList.Padding = UDim.new(0, 8)
+cardList.Parent = card
 
--- ==================== 用自定义图标 ====================
-local iconSec = demoTab:Section({ Title = "自定义图标", Icon = "folder", Opened = true })
+-- ==================== 第一层：头像 + 群名 ====================
+local avatarRow = Instance.new("Frame")
+avatarRow.BackgroundTransparency = 1
+avatarRow.Size = UDim2.new(0, 250, 0, 56)
+avatarRow.Parent = card
 
-iconSec:Button({
-    Title = "用 mypack:sword 图标",
-    Desc = "图标会跟随主题色",
-    Icon = "mypack:sword",
-    Callback = function()
-        print("点击了自定义图标按钮")
-    end,
-})
+local rowList = Instance.new("UIListLayout")
+rowList.FillDirection = Enum.FillDirection.Horizontal
+rowList.HorizontalAlignment = Enum.HorizontalAlignment.Center
+rowList.VerticalAlignment = Enum.VerticalAlignment.Center
+rowList.Padding = UDim.new(0, 10)
+rowList.Parent = avatarRow
 
-iconSec:Toggle({
-    Title = "自定义图标开关",
-    Icon = "mypack:gem",
-    Value = false,
-    Callback = function(v)
-        print("开关:", v)
-    end,
-})
+-- 方形头像（暗色底 + 中间白色"黑白脚本"文字）
+local avatar = Instance.new("Frame")
+avatar.Name = "Avatar"
+avatar.BackgroundColor3 = Color3.fromRGB(35, 35, 42)
+avatar.Size = UDim2.fromOffset(56, 56)
+avatar.Parent = avatarRow
+Instance.new("UICorner", avatar).CornerRadius = UDim.new(0, 10)
+
+local avatarText = Instance.new("TextLabel")
+avatarText.BackgroundTransparency = 1
+avatarText.Size = UDim2.new(1, 0, 1, 0)
+avatarText.Font = Enum.Font.GothamBold
+avatarText.Text = "黑白脚本"
+avatarText.TextColor3 = Color3.fromRGB(255, 255, 255)
+avatarText.TextSize = 13
+avatarText.Parent = avatar
+
+-- 群名（纯白加粗大字，垂直居中）
+local groupName = Instance.new("TextLabel")
+groupName.BackgroundTransparency = 1
+groupName.Size = UDim2.new(0, 180, 0, 56)
+groupName.Font = Enum.Font.GothamBold
+groupName.Text = "黑白脚本群"
+groupName.TextColor3 = Color3.fromRGB(255, 255, 255)
+groupName.TextSize = 24
+groupName.TextXAlignment = Enum.TextXAlignment.Left
+groupName.Parent = avatarRow
+
+-- ==================== 第二层：提示小字 ====================
+local hint = Instance.new("TextLabel")
+hint.BackgroundTransparency = 1
+hint.Size = UDim2.new(0, 300, 0, 18)
+hint.Font = Enum.Font.Gotham
+hint.Text = "点击按钮获取黑白脚本群QQ号"
+hint.TextColor3 = Color3.fromRGB(190, 190, 198)
+hint.TextSize = 13
+hint.Parent = card
+
+-- ==================== 第三层：复制按钮 ====================
+local copyBtn = Instance.new("TextButton")
+copyBtn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+copyBtn.Size = UDim2.new(0, 180, 0, 38)
+copyBtn.Font = Enum.Font.GothamBold
+copyBtn.Text = "复制群号"
+copyBtn.TextColor3 = Color3.fromRGB(20, 20, 25)
+copyBtn.TextSize = 16
+copyBtn.Parent = card
+Instance.new("UICorner", copyBtn).CornerRadius = UDim.new(0, 8)
+
+copyBtn.MouseButton1Click:Connect(function()
+    if setclipboard then
+        setclipboard(QQ群号)
+        pcall(WindUI.Notify, WindUI, {
+            Title = "复制成功",
+            Content = "群号已复制：" .. QQ群号,
+            Icon = "clipboard",
+            Duration = 2,
+        })
+    else
+        warn("当前环境不支持 setclipboard")
+    end
+end)
 
 WindUI:Notify({
-    Title = "图片/图标示例",
-    Content = "图片用 ImageLabel 直挂显示，高度 200",
+    Title = "群组卡片示例",
+    Content = "卡片已生成，试试复制按钮",
     Icon = "aperture",
-    Duration = 5,
+    Duration = 4,
 })
