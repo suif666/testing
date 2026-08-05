@@ -52,6 +52,15 @@ local CAT_COLORS = {
     neutral = Color3.fromRGB(180, 180, 190),
 }
 
+local function colorToHex(c)
+    return string.format(
+        "#%02X%02X%02X",
+        math.floor(c.R * 255 + 0.5),
+        math.floor(c.G * 255 + 0.5),
+        math.floor(c.B * 255 + 0.5)
+    )
+end
+
 -- ============ 雷达父级：优先 gethui()（Delta 兼容） ============
 local RadarParent
 do
@@ -122,14 +131,19 @@ local okOverlay, errOverlay = pcall(function()
     crossV.ZIndex = 4
     crossV.Parent = radarFrame
 
-    -- 自己（中心白点）
+    -- 自己（中心空心圆环，不遮挡其他玩家的亮点）
     local centerDot = Instance.new("Frame")
-    centerDot.Size = UDim2.fromOffset(8, 8)
-    centerDot.Position = UDim2.new(0.5, -4, 0.5, -4)
-    centerDot.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    centerDot.Size = UDim2.fromOffset(12, 12)
+    centerDot.Position = UDim2.new(0.5, -6, 0.5, -6)
+    centerDot.BackgroundTransparency = 1
     centerDot.ZIndex = 6
     centerDot.Parent = radarFrame
     Instance.new("UICorner", centerDot).CornerRadius = UDim.new(1, 0)
+
+    local centerStroke = Instance.new("UIStroke")
+    centerStroke.Color = Color3.fromRGB(255, 255, 255)
+    centerStroke.Thickness = 1.5
+    centerStroke.Parent = centerDot
 
     -- ============ 放大/还原按钮（雷达右上角） ============
     local zoomBtn = Instance.new("TextButton")
@@ -168,6 +182,7 @@ local okOverlay, errOverlay = pcall(function()
         label.TextColor3 = Color3.fromRGB(255, 255, 255)
         label.TextSize = 11
         label.TextStrokeTransparency = 0.1
+        label.RichText = true
         label.Visible = false
         label.ZIndex = 7
         label.Parent = b
@@ -445,8 +460,14 @@ local okOverlay, errOverlay = pcall(function()
                             blip.Frame.BackgroundColor3 = CAT_COLORS[cat]
                             blip.Frame.Visible = true
 
-                            blip.Label.Text = p.Name .. "  " .. math.floor(dist) .. "m"
-                            blip.Label.TextColor3 = CAT_COLORS[cat]
+                            -- 名字用分类色，距离用白色，颜色区分
+                            blip.Label.Text = string.format(
+                                '<font color="%s">%s</font>  <font color="#FFFFFF">%dm</font>',
+                                colorToHex(CAT_COLORS[cat]),
+                                p.Name,
+                                math.floor(dist)
+                            )
+                            blip.Label.TextColor3 = Color3.fromRGB(255, 255, 255)
                             blip.Label.Visible = showLabels
 
                             -- 放大模式优先显示玩家头像，取不到则显示彩色圆点
