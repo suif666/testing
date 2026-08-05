@@ -167,12 +167,21 @@ local okOverlay, errOverlay = pcall(function()
         label.Text = ""
         label.TextColor3 = Color3.fromRGB(255, 255, 255)
         label.TextSize = 11
-        label.TextStrokeTransparency = 0.2
+        label.TextStrokeTransparency = 0.1
         label.Visible = false
         label.ZIndex = 7
         label.Parent = b
 
-        table.insert(blips, { Frame = b, Label = label })
+        -- 放大模式下的玩家头像
+        local avatar = Instance.new("ImageLabel")
+        avatar.BackgroundTransparency = 1
+        avatar.Size = UDim2.new(1, 0, 1, 0)
+        avatar.Visible = false
+        avatar.ZIndex = 6
+        avatar.Parent = b
+        Instance.new("UICorner", avatar).CornerRadius = UDim.new(1, 0)
+
+        table.insert(blips, { Frame = b, Label = label, Avatar = avatar })
     end
 
     -- ============ 范围滑块面板（放大时显示在屏幕右侧） ============
@@ -228,14 +237,14 @@ local okOverlay, errOverlay = pcall(function()
     local function updateRangeSlider()
         local pct = (Settings.Range - RANGE_MIN) / (RANGE_MAX - RANGE_MIN)
         fill.Size = UDim2.new(1, 0, 0, 230 * pct)
-        local handleY = 32 + (1 - pct) * 230 - 12
+        local handleY = 32 + pct * 230 - 12      -- 上 = 近距离，下 = 远距离
         handle.Position = UDim2.new(0.5, -12, 0, handleY)
         rangeLabel.Text = tostring(math.floor(Settings.Range)) .. "m"
     end
 
     local function setRangeFromScreenY(screenY)
         local trackPos = track.AbsolutePosition
-        local pct = 1 - (screenY - trackPos.Y) / 230
+        local pct = (screenY - trackPos.Y) / 230   -- 越往下越大 = 越远
         pct = math.clamp(pct, 0, 1)
         Settings.Range = math.floor(RANGE_MIN + (RANGE_MAX - RANGE_MIN) * pct)
         updateRangeSlider()
@@ -273,12 +282,33 @@ local okOverlay, errOverlay = pcall(function()
         ["右下"] = { AnchorPoint = Vector2.new(1, 1), Pos = UDim2.new(1, -12, 1, -12) },
     }
 
+    -- 放大按钮自适应到雷达的对角
+    local ZOOM_BTN_POS = {
+        ["左上"] = { Anchor = Vector2.new(1, 1), Pos = UDim2.new(1, -6, 1, -6) },
+        ["右上"] = { Anchor = Vector2.new(0, 1), Pos = UDim2.new(0, 6, 1, -6) },
+        ["左下"] = { Anchor = Vector2.new(1, 0), Pos = UDim2.new(1, -6, 0, 6) },
+        ["右下"] = { Anchor = Vector2.new(0, 0), Pos = UDim2.new(0, 6, 0, 6) },
+    }
+
+    local function applyZoomBtnPos()
+        if Settings.Zoomed then
+            -- 全屏时固定在屏幕右上角
+            zoomBtn.AnchorPoint = Vector2.new(1, 0)
+            zoomBtn.Position = UDim2.new(1, -6, 0, 6)
+        else
+            local d = ZOOM_BTN_POS[Settings.Position] or ZOOM_BTN_POS["右上"]
+            zoomBtn.AnchorPoint = d.Anchor
+            zoomBtn.Position = d.Pos
+        end
+    end
+
     local function applyPosition()
         if Settings.Zoomed then return end -- 全屏时不套用角落位置
         local data = PositionMap[Settings.Position]
         if not data then return end
         radarFrame.AnchorPoint = data.AnchorPoint
         radarFrame.Position = data.Pos
+        applyZoomBtnPos()
     end
 
     local function applyCorner()
@@ -299,6 +329,7 @@ local okOverlay, errOverlay = pcall(function()
             rangePanel.Visible = false
             applyPosition()
         end
+        applyZoomBtnPos()
     end
 
     zoomBtn.MouseButton1Click:Connect(function()
@@ -328,6 +359,22 @@ local okOverlay, errOverlay = pcall(function()
         end
     end)
 
+    -- 玩家头像缓存：取一次后复用，取不到就回退圆点
+    local avatarCache = {}
+    local function getAvatar(p)
+        local cached = avatarCache[p]
+        if cached == nil then
+            avatarCache[p] = false
+            task.spawn(function()
+                local ok, url = pcall(function()
+                    return Players:GetUserThumbnailAsync(p.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size48x48)
+                end)
+                avatarCache[p] = ok and url or false
+            end)
+        end
+        return cached
+    end
+
     -- ============ 每帧更新 ============
     local function updateRadar()
         local myChar = lp.Character
@@ -335,6 +382,7 @@ local okOverlay, errOverlay = pcall(function()
         if not myHrp then
             for _, blip in ipairs(blips) do
                 blip.Frame.Visible = false
+                blip.Avatar.Visible = false
                 blip.Label.Visible = false
             end
             return
@@ -353,7 +401,7 @@ local okOverlay, errOverlay = pcall(function()
         local margin = Settings.Zoomed and 80 or 10
         local scaleX = (w / 2 - margin) / Settings.Range
         local scaleY = (h / 2 - margin) / Settings.Range
-        local blipSize = Settings.Zoomed and 10 or 6
+        local blipSize = Settings.Zoomed and 22 or 6
         local showLabels = Settings.Zoomed
 
         local idx = 0
@@ -400,6 +448,15 @@ local okOverlay, errOverlay = pcall(function()
                             blip.Label.Text = p.Name .. "  " .. math.floor(dist) .. "m"
                             blip.Label.TextColor3 = CAT_COLORS[cat]
                             blip.Label.Visible = showLabels
+
+                            -- 放大模式优先显示玩家头像，取不到则显示彩色圆点
+                            local avatarUrl = showLabels and getAvatar(p) or nil
+                            if avatarUrl then
+                                blip.Avatar.Visible = true
+                                blip.Avatar.Image = avatarUrl
+                            else
+                                blip.Avatar.Visible = false
+                            end
                         end
                     end
                 end
@@ -409,6 +466,7 @@ local okOverlay, errOverlay = pcall(function()
         for i = idx + 1, BLIP_COUNT do
             local blip = blips[i]
             blip.Frame.Visible = false
+            blip.Avatar.Visible = false
             blip.Label.Visible = false
         end
     end
