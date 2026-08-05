@@ -1,5 +1,7 @@
--- WindUI 雷达（兼容 Delta）
--- 功能：四角位置切换（下拉框）、圆角程度（滑块）、敌人/队友/好友/中立显示开关
+-- WindUI 雷达 v2（兼容 Delta）
+-- 功能：四角位置、圆角滑块、敌人/队友/好友/中立开关
+--       放大按钮 -> 全屏雷达；右侧垂直滑块调探测范围
+--       放大时显示用户名 + 距离(m)；雷达不挡游戏 UI
 print("[雷达] 开始执行")
 
 local WindUI
@@ -23,17 +25,20 @@ print("[雷达] WindUI 加载完成")
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
 local lp = Players.LocalPlayer
 
-local RADAR_SIZE = 200          -- 雷达边长（像素）
-local RADAR_RANGE = 200         -- 探测范围（studs），想改远改这里
-local BLIP_SIZE = 6             -- 亮点大小
-local BLIP_COUNT = 40           -- 最多显示多少个亮点
+local RADAR_SIZE = 200          -- 普通模式雷达边长
+local BLIP_COUNT = 50           -- 亮点上限
+local RANGE_MIN = 50            -- 范围滑块最小值（m）
+local RANGE_MAX = 1000          -- 范围滑块最大值（m）
 
 local Settings = {
     Enabled = true,
+    Zoomed = false,
     Position = "右上",
-    Corner = 50,                -- 圆角程度 0~100，100 = 正圆
+    Corner = 50,                -- 圆角 0~100
+    Range = 200,                -- 探测范围（m）
     ShowEnemy = true,
     ShowTeam = true,
     ShowFriend = true,
@@ -69,6 +74,7 @@ end
 
 local radarGui = Instance.new("ScreenGui")
 radarGui.Name = "RadarOverlay"
+radarGui.DisplayOrder = -99999      -- 尽量压在游戏 UI 下面，不挡界面
 radarGui.IgnoreGuiInset = true
 radarGui.ResetOnSpawn = false
 radarGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
@@ -80,13 +86,14 @@ if protect then
 end
 
 local okOverlay, errOverlay = pcall(function()
-    -- ============ 雷达底板 ============
+    -- ============ 雷达底板（Active=false 不拦截游戏点击） ============
     local radarFrame = Instance.new("Frame")
     radarFrame.Name = "Radar"
     radarFrame.Size = UDim2.fromOffset(RADAR_SIZE, RADAR_SIZE)
     radarFrame.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
     radarFrame.BackgroundTransparency = 0.25
     radarFrame.ClipsDescendants = true
+    radarFrame.Active = false
     radarFrame.ZIndex = 4
     radarFrame.Parent = radarGui
 
@@ -124,20 +131,141 @@ local okOverlay, errOverlay = pcall(function()
     centerDot.Parent = radarFrame
     Instance.new("UICorner", centerDot).CornerRadius = UDim.new(1, 0)
 
-    -- 亮点池
+    -- ============ 放大/还原按钮（雷达右上角） ============
+    local zoomBtn = Instance.new("TextButton")
+    zoomBtn.Name = "ZoomButton"
+    zoomBtn.Size = UDim2.fromOffset(26, 26)
+    zoomBtn.Position = UDim2.new(1, -34, 0, 6)
+    zoomBtn.AnchorPoint = Vector2.new(1, 0)
+    zoomBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
+    zoomBtn.BackgroundTransparency = 0.2
+    zoomBtn.Font = Enum.Font.GothamBold
+    zoomBtn.Text = "+"
+    zoomBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    zoomBtn.TextSize = 16
+    zoomBtn.ZIndex = 10
+    zoomBtn.Parent = radarFrame
+    Instance.new("UICorner", zoomBtn).CornerRadius = UDim.new(0, 6)
+
+    -- ============ 亮点池（每个带用户名 + 距离标签） ============
     local blips = {}
     for i = 1, BLIP_COUNT do
         local b = Instance.new("Frame")
-        b.Size = UDim2.fromOffset(BLIP_SIZE, BLIP_SIZE)
+        b.Size = UDim2.fromOffset(6, 6)
         b.AnchorPoint = Vector2.new(0.5, 0.5)
         b.Visible = false
         b.ZIndex = 5
         b.Parent = radarFrame
         Instance.new("UICorner", b).CornerRadius = UDim.new(1, 0)
-        table.insert(blips, b)
+
+        local label = Instance.new("TextLabel")
+        label.BackgroundTransparency = 1
+        label.Size = UDim2.new(0, 130, 0, 14)
+        label.AnchorPoint = Vector2.new(0.5, 1)
+        label.Position = UDim2.new(0.5, 0, 0, -4)
+        label.Font = Enum.Font.GothamBold
+        label.Text = ""
+        label.TextColor3 = Color3.fromRGB(255, 255, 255)
+        label.TextSize = 11
+        label.TextStrokeTransparency = 0.2
+        label.Visible = false
+        label.ZIndex = 7
+        label.Parent = b
+
+        table.insert(blips, { Frame = b, Label = label })
     end
 
-    -- ============ 位置 / 圆角 ============
+    -- ============ 范围滑块面板（放大时显示在屏幕右侧） ============
+    local rangePanel = Instance.new("Frame")
+    rangePanel.Name = "RangePanel"
+    rangePanel.Size = UDim2.fromOffset(44, 300)
+    rangePanel.AnchorPoint = Vector2.new(1, 0.5)
+    rangePanel.Position = UDim2.new(1, -16, 0.5, 0)
+    rangePanel.BackgroundColor3 = Color3.fromRGB(15, 15, 22)
+    rangePanel.BackgroundTransparency = 0.15
+    rangePanel.Visible = false
+    rangePanel.ZIndex = 8
+    rangePanel.Parent = radarFrame
+    Instance.new("UICorner", rangePanel).CornerRadius = UDim.new(0, 8)
+
+    local rangeLabel = Instance.new("TextLabel")
+    rangeLabel.BackgroundTransparency = 1
+    rangeLabel.Size = UDim2.new(1, 0, 0, 22)
+    rangeLabel.Font = Enum.Font.GothamBold
+    rangeLabel.Text = "200m"
+    rangeLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    rangeLabel.TextSize = 13
+    rangeLabel.ZIndex = 9
+    rangeLabel.Parent = rangePanel
+
+    local track = Instance.new("Frame")
+    track.Size = UDim2.new(0, 8, 0, 230)
+    track.Position = UDim2.new(0.5, -4, 0, 32)
+    track.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+    track.ZIndex = 9
+    track.Parent = rangePanel
+    Instance.new("UICorner", track).CornerRadius = UDim.new(1, 0)
+
+    local fill = Instance.new("Frame")
+    fill.Size = UDim2.new(1, 0, 0, 0)
+    fill.AnchorPoint = Vector2.new(0, 1)
+    fill.Position = UDim2.new(0, 0, 1, 0)
+    fill.BackgroundColor3 = Color3.fromRGB(120, 200, 255)
+    fill.ZIndex = 9
+    fill.Parent = track
+    Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+
+    local handle = Instance.new("TextButton")
+    handle.Size = UDim2.fromOffset(24, 24)
+    handle.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    handle.Text = ""
+    handle.ZIndex = 10
+    handle.Parent = rangePanel
+    Instance.new("UICorner", handle).CornerRadius = UDim.new(1, 0)
+
+    local dragging = false
+
+    local function updateRangeSlider()
+        local pct = (Settings.Range - RANGE_MIN) / (RANGE_MAX - RANGE_MIN)
+        fill.Size = UDim2.new(1, 0, 0, 230 * pct)
+        local handleY = 32 + (1 - pct) * 230 - 12
+        handle.Position = UDim2.new(0.5, -12, 0, handleY)
+        rangeLabel.Text = tostring(math.floor(Settings.Range)) .. "m"
+    end
+
+    local function setRangeFromScreenY(screenY)
+        local trackPos = track.AbsolutePosition
+        local pct = 1 - (screenY - trackPos.Y) / 230
+        pct = math.clamp(pct, 0, 1)
+        Settings.Range = math.floor(RANGE_MIN + (RANGE_MAX - RANGE_MIN) * pct)
+        updateRangeSlider()
+    end
+
+    handle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+        end
+    end)
+
+    UIS.InputChanged:Connect(function(input)
+        if dragging
+            and (input.UserInputType == Enum.UserInputType.MouseMovement
+                or input.UserInputType == Enum.UserInputType.Touch) then
+            pcall(setRangeFromScreenY, input.Position.Y)
+        end
+    end)
+
+    UIS.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+
+    updateRangeSlider()
+
+    -- ============ 位置 / 圆角 / 缩放 ============
     local PositionMap = {
         ["左上"] = { AnchorPoint = Vector2.new(0, 0), Pos = UDim2.new(0, 12, 0, 12) },
         ["右上"] = { AnchorPoint = Vector2.new(1, 0), Pos = UDim2.new(1, -12, 0, 12) },
@@ -146,6 +274,7 @@ local okOverlay, errOverlay = pcall(function()
     }
 
     local function applyPosition()
+        if Settings.Zoomed then return end -- 全屏时不套用角落位置
         local data = PositionMap[Settings.Position]
         if not data then return end
         radarFrame.AnchorPoint = data.AnchorPoint
@@ -157,8 +286,27 @@ local okOverlay, errOverlay = pcall(function()
         corner.CornerRadius = UDim.new(0, math.floor((RADAR_SIZE / 2) * pct))
     end
 
-    -- ============ 更新逻辑 ============
-    -- 好友关系缓存：每 5 秒刷新一次，避免每帧调用 IsFriendsWith 造成卡顿
+    local function applyZoom()
+        if Settings.Zoomed then
+            radarFrame.Size = UDim2.new(1, 0, 1, 0)
+            radarFrame.AnchorPoint = Vector2.new(0, 0)
+            radarFrame.Position = UDim2.new(0, 0, 0, 0)
+            zoomBtn.Text = "-"
+            rangePanel.Visible = true
+        else
+            radarFrame.Size = UDim2.fromOffset(RADAR_SIZE, RADAR_SIZE)
+            zoomBtn.Text = "+"
+            rangePanel.Visible = false
+            applyPosition()
+        end
+    end
+
+    zoomBtn.MouseButton1Click:Connect(function()
+        Settings.Zoomed = not Settings.Zoomed
+        pcall(applyZoom)
+    end)
+
+    -- ============ 好友缓存（每 5 秒刷新，避免卡顿） ============
     local friendCache = {}
     local function refreshFriends()
         for _, p in ipairs(Players:GetPlayers()) do
@@ -173,12 +321,21 @@ local okOverlay, errOverlay = pcall(function()
 
     pcall(refreshFriends)
 
+    task.spawn(function()
+        while true do
+            pcall(refreshFriends)
+            task.wait(5)
+        end
+    end)
+
+    -- ============ 每帧更新 ============
     local function updateRadar()
         local myChar = lp.Character
         local myHrp = myChar and myChar:FindFirstChild("HumanoidRootPart")
         if not myHrp then
-            for _, b in ipairs(blips) do
-                b.Visible = false
+            for _, blip in ipairs(blips) do
+                blip.Frame.Visible = false
+                blip.Label.Visible = false
             end
             return
         end
@@ -188,7 +345,16 @@ local okOverlay, errOverlay = pcall(function()
         local look = cf.LookVector
         local myPos = myHrp.Position
         local myTeam = lp.Team
-        local scale = (RADAR_SIZE / 2 - 10) / RADAR_RANGE
+
+        local w = radarFrame.AbsoluteSize.X
+        local h = radarFrame.AbsoluteSize.Y
+        if w <= 0 or h <= 0 then return end
+
+        local margin = Settings.Zoomed and 80 or 10
+        local scaleX = (w / 2 - margin) / Settings.Range
+        local scaleY = (h / 2 - margin) / Settings.Range
+        local blipSize = Settings.Zoomed and 10 or 6
+        local showLabels = Settings.Zoomed
 
         local idx = 0
         for _, p in ipairs(Players:GetPlayers()) do
@@ -197,7 +363,7 @@ local okOverlay, errOverlay = pcall(function()
                 if hrp then
                     local rel = hrp.Position - myPos
                     local dist = rel.Magnitude
-                    if dist <= RADAR_RANGE then
+                    if dist <= Settings.Range then
                         -- 分类：好友 > 队友 > 敌人/中立
                         local isFriend = friendCache[p] or false
                         local sameTeam = myTeam ~= nil and p.Team == myTeam
@@ -209,9 +375,9 @@ local okOverlay, errOverlay = pcall(function()
                         elseif myTeam ~= nil and p.Team ~= nil then
                             cat = "enemy"
                         elseif myTeam ~= nil then
-                            cat = "neutral"   -- 对方还没入队
+                            cat = "neutral"
                         else
-                            cat = "enemy"     -- 自由对战：非好友都是敌人
+                            cat = "enemy"
                         end
 
                         local show = (cat == "enemy" and Settings.ShowEnemy)
@@ -223,13 +389,17 @@ local okOverlay, errOverlay = pcall(function()
                             idx = idx + 1
                             if idx > BLIP_COUNT then break end
 
-                            -- 以角色朝向为雷达正上方
                             local rx = rel:Dot(right)
                             local rz = rel:Dot(look)
-                            local b = blips[idx]
-                            b.Position = UDim2.new(0.5, rx * scale, 0.5, -rz * scale)
-                            b.BackgroundColor3 = CAT_COLORS[cat]
-                            b.Visible = true
+                            local blip = blips[idx]
+                            blip.Frame.Position = UDim2.new(0.5, rx * scaleX, 0.5, -rz * scaleY)
+                            blip.Frame.Size = UDim2.fromOffset(blipSize, blipSize)
+                            blip.Frame.BackgroundColor3 = CAT_COLORS[cat]
+                            blip.Frame.Visible = true
+
+                            blip.Label.Text = p.Name .. "  " .. math.floor(dist) .. "m"
+                            blip.Label.TextColor3 = CAT_COLORS[cat]
+                            blip.Label.Visible = showLabels
                         end
                     end
                 end
@@ -237,19 +407,12 @@ local okOverlay, errOverlay = pcall(function()
         end
 
         for i = idx + 1, BLIP_COUNT do
-            blips[i].Visible = false
+            local blip = blips[i]
+            blip.Frame.Visible = false
+            blip.Label.Visible = false
         end
     end
 
-    -- 后台每 5 秒刷新好友缓存
-    task.spawn(function()
-        while true do
-            pcall(refreshFriends)
-            task.wait(5)
-        end
-    end)
-
-    -- 高帧率平滑更新：每帧渲染（数学计算很轻量）
     RunService.Heartbeat:Connect(function()
         if Settings.Enabled then
             pcall(updateRadar)
@@ -258,11 +421,13 @@ local okOverlay, errOverlay = pcall(function()
 
     applyPosition()
     applyCorner()
+    applyZoom()
 
     return {
         Frame = radarFrame,
         ApplyPosition = applyPosition,
         ApplyCorner = applyCorner,
+        ApplyZoom = applyZoom,
     }
 end)
 
@@ -307,7 +472,7 @@ tab:Toggle({
 
 tab:Dropdown({
     Title = "显示位置",
-    Desc = "雷达放在屏幕哪个角",
+    Desc = "普通模式下雷达放在哪个角",
     Values = { "左上", "右上", "左下", "右下" },
     Value = Settings.Position,
     Callback = function(v)
@@ -324,6 +489,15 @@ tab:Slider({
     Callback = function(v)
         Settings.Corner = v
         pcall(Radar.ApplyCorner)
+    end,
+})
+
+tab:Button({
+    Title = "放大/还原雷达",
+    Desc = "和雷达上的 + / - 按钮一样",
+    Callback = function()
+        Settings.Zoomed = not Settings.Zoomed
+        pcall(Radar.ApplyZoom)
     end,
 })
 
@@ -367,7 +541,7 @@ print("[雷达] 全部加载完成")
 
 WindUI:Notify({
     Title = "雷达",
-    Content = "加载完成！右上角可见雷达",
+    Content = "加载完成！点雷达右上角 + 放大",
     Icon = "radar",
     Duration = 4,
 })
