@@ -1,27 +1,17 @@
--- WindUI 雷达 v2（兼容 Delta）
--- 功能：四角位置、圆角滑块、敌人/队友/好友/中立开关
---       放大按钮 -> 全屏雷达；右侧垂直滑块调探测范围
---       放大时显示用户名 + 距离(m)；雷达不挡游戏 UI
-print("[雷达] 开始执行")
+-- 雷达 远程脚本（显示功能 + UI，依赖主脚本提供 RadarTab）
+-- 主脚本需设置：getgenv().Tabs.RadarTab（或 getgenv().SutureRadarTab）
+print("[雷达] 远程脚本开始执行")
 
-local WindUI
-do
-    local ok, res = pcall(function()
-        local source = game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua")
-        local fn, compileErr = loadstring(source)
-        if not fn then
-            error(compileErr)
-        end
-        return fn()
-    end)
-
-    if not ok or not res then
-        warn("WindUI 加载失败，脚本已停止:", res)
-        return
-    end
-    WindUI = res
+if getgenv().__SUTURE_RADAR_LOADED then
+    return
 end
-print("[雷达] WindUI 加载完成")
+getgenv().__SUTURE_RADAR_LOADED = true
+
+local Tab = (getgenv().Tabs and getgenv().Tabs.RadarTab) or getgenv().SutureRadarTab
+if not Tab then
+    warn("[雷达] 未找到 RadarTab，请检查主脚本是否正确赋值")
+    return
+end
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -34,11 +24,11 @@ local RANGE_MIN = 50            -- 范围滑块最小值（m）
 local RANGE_MAX = 1000          -- 范围滑块最大值（m）
 
 local Settings = {
-    Enabled = true,
+    Enabled = false,            -- 默认关闭
     Zoomed = false,
     Position = "右上",
-    Corner = 50,                -- 圆角 0~100
-    Range = 200,                -- 探测范围（m）
+    Corner = 50,
+    Range = 200,
     ShowEnemy = true,
     ShowTeam = true,
     ShowFriend = true,
@@ -145,12 +135,10 @@ local okOverlay, errOverlay = pcall(function()
     centerStroke.Thickness = 1.5
     centerStroke.Parent = centerDot
 
-    -- ============ 放大/还原按钮（雷达右上角） ============
+    -- ============ 放大/还原按钮（自适应到雷达对角） ============
     local zoomBtn = Instance.new("TextButton")
     zoomBtn.Name = "ZoomButton"
     zoomBtn.Size = UDim2.fromOffset(26, 26)
-    zoomBtn.Position = UDim2.new(1, -34, 0, 6)
-    zoomBtn.AnchorPoint = Vector2.new(1, 0)
     zoomBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
     zoomBtn.BackgroundTransparency = 0.2
     zoomBtn.Font = Enum.Font.GothamBold
@@ -161,7 +149,7 @@ local okOverlay, errOverlay = pcall(function()
     zoomBtn.Parent = radarFrame
     Instance.new("UICorner", zoomBtn).CornerRadius = UDim.new(0, 6)
 
-    -- ============ 亮点池（每个带用户名 + 距离标签） ============
+    -- ============ 亮点池（头像 + 名字/距离标签） ============
     local blips = {}
     for i = 1, BLIP_COUNT do
         local b = Instance.new("Frame")
@@ -187,7 +175,6 @@ local okOverlay, errOverlay = pcall(function()
         label.ZIndex = 7
         label.Parent = b
 
-        -- 放大模式下的玩家头像
         local avatar = Instance.new("ImageLabel")
         avatar.BackgroundTransparency = 1
         avatar.Size = UDim2.new(1, 0, 1, 0)
@@ -297,7 +284,6 @@ local okOverlay, errOverlay = pcall(function()
         ["右下"] = { AnchorPoint = Vector2.new(1, 1), Pos = UDim2.new(1, -12, 1, -12) },
     }
 
-    -- 放大按钮自适应到雷达的对角
     local ZOOM_BTN_POS = {
         ["左上"] = { Anchor = Vector2.new(1, 1), Pos = UDim2.new(1, -6, 1, -6) },
         ["右上"] = { Anchor = Vector2.new(0, 1), Pos = UDim2.new(0, 6, 1, -6) },
@@ -307,7 +293,6 @@ local okOverlay, errOverlay = pcall(function()
 
     local function applyZoomBtnPos()
         if Settings.Zoomed then
-            -- 全屏时固定在屏幕右上角
             zoomBtn.AnchorPoint = Vector2.new(1, 0)
             zoomBtn.Position = UDim2.new(1, -6, 0, 6)
         else
@@ -318,7 +303,7 @@ local okOverlay, errOverlay = pcall(function()
     end
 
     local function applyPosition()
-        if Settings.Zoomed then return end -- 全屏时不套用角落位置
+        if Settings.Zoomed then return end
         local data = PositionMap[Settings.Position]
         if not data then return end
         radarFrame.AnchorPoint = data.AnchorPoint
@@ -337,7 +322,7 @@ local okOverlay, errOverlay = pcall(function()
             radarFrame.AnchorPoint = Vector2.new(0, 0)
             radarFrame.Position = UDim2.new(0, 0, 0, 0)
             zoomBtn.Text = "-"
-            rangePanel.Visible = true
+            rangePanel.Visible = Settings.Enabled
         else
             radarFrame.Size = UDim2.fromOffset(RADAR_SIZE, RADAR_SIZE)
             zoomBtn.Text = "+"
@@ -347,12 +332,22 @@ local okOverlay, errOverlay = pcall(function()
         applyZoomBtnPos()
     end
 
+    local function setEnabled(v)
+        Settings.Enabled = v and true or false
+        radarFrame.Visible = Settings.Enabled
+        if not Settings.Enabled then
+            rangePanel.Visible = false
+        elseif Settings.Zoomed then
+            rangePanel.Visible = true
+        end
+    end
+
     zoomBtn.MouseButton1Click:Connect(function()
         Settings.Zoomed = not Settings.Zoomed
         pcall(applyZoom)
     end)
 
-    -- ============ 好友缓存（每 5 秒刷新，避免卡顿） ============
+    -- ============ 好友缓存（每 5 秒刷新） ============
     local friendCache = {}
     local function refreshFriends()
         for _, p in ipairs(Players:GetPlayers()) do
@@ -374,7 +369,7 @@ local okOverlay, errOverlay = pcall(function()
         end
     end)
 
-    -- 玩家头像缓存：取一次后复用，取不到就回退圆点
+    -- ============ 玩家头像缓存 ============
     local avatarCache = {}
     local function getAvatar(p)
         local cached = avatarCache[p]
@@ -427,7 +422,6 @@ local okOverlay, errOverlay = pcall(function()
                     local rel = hrp.Position - myPos
                     local dist = rel.Magnitude
                     if dist <= Settings.Range then
-                        -- 分类：好友 > 队友 > 敌人/中立
                         local isFriend = friendCache[p] or false
                         local sameTeam = myTeam ~= nil and p.Team == myTeam
                         local cat
@@ -460,7 +454,7 @@ local okOverlay, errOverlay = pcall(function()
                             blip.Frame.BackgroundColor3 = CAT_COLORS[cat]
                             blip.Frame.Visible = true
 
-                            -- 名字用分类色，距离用白色，颜色区分
+                            blip.Label.RichText = true
                             blip.Label.Text = string.format(
                                 '<font color="%s">%s</font>  <font color="#FFFFFF">%dm</font>',
                                 colorToHex(CAT_COLORS[cat]),
@@ -470,7 +464,6 @@ local okOverlay, errOverlay = pcall(function()
                             blip.Label.TextColor3 = Color3.fromRGB(255, 255, 255)
                             blip.Label.Visible = showLabels
 
-                            -- 放大模式优先显示玩家头像，取不到则显示彩色圆点
                             local avatarUrl = showLabels and getAvatar(p) or nil
                             if avatarUrl then
                                 blip.Avatar.Visible = true
@@ -501,12 +494,13 @@ local okOverlay, errOverlay = pcall(function()
     applyPosition()
     applyCorner()
     applyZoom()
+    setEnabled(Settings.Enabled)
 
     return {
-        Frame = radarFrame,
         ApplyPosition = applyPosition,
         ApplyCorner = applyCorner,
         ApplyZoom = applyZoom,
+        SetEnabled = setEnabled,
     }
 end)
 
@@ -514,113 +508,90 @@ if not okOverlay then
     warn("[雷达] 雷达覆盖层创建失败:", errOverlay)
     return
 end
-print("[雷达] 覆盖层创建完成")
 
 local Radar = errOverlay
 
--- ============ WindUI 控制面板 ============
-local win = WindUI:CreateWindow({
-    Title = "雷达",
-    Icon = "radar",
-    Author = "demo",
-    Folder = "RadarHub",
-    Size = UDim2.fromOffset(620, 460),
-    Resizable = true,
-    Transparent = true,
-    Theme = "Dark",
-    SideBarWidth = 180,
-    NewElements = true,
-})
-print("[雷达] 窗口创建完成")
+-- ============ UI 控件（加到主脚本提供的 Tab 里） ============
+local okUI, errUI = pcall(function()
+    Tab:Toggle({
+        Title = "启用雷达",
+        Desc = "默认关闭，开启后显示",
+        Value = Settings.Enabled,
+        Callback = function(v)
+            pcall(Radar.SetEnabled, v)
+        end,
+    })
 
-local sec = win:Section({ Title = "雷达设置", Icon = "folder", Opened = true })
-local tab = sec:Tab({ Title = "设置", Icon = "sliders-horizontal" })
-tab:Select()
+    Tab:Dropdown({
+        Title = "显示位置",
+        Desc = "雷达放在哪个角",
+        Values = { "左上", "右上", "左下", "右下" },
+        Value = Settings.Position,
+        Callback = function(v)
+            Settings.Position = v
+            pcall(Radar.ApplyPosition)
+        end,
+    })
 
-tab:Toggle({
-    Title = "启用雷达",
-    Desc = "总开关",
-    Value = Settings.Enabled,
-    Callback = function(v)
-        Settings.Enabled = v
-        pcall(function()
-            Radar.Frame.Visible = v
-        end)
-    end,
-})
+    Tab:Slider({
+        Title = "圆角程度",
+        Desc = "越高越圆，100 为圆形",
+        Step = 1,
+        Value = { Min = 0, Max = 100, Default = Settings.Corner },
+        Callback = function(v)
+            Settings.Corner = v
+            pcall(Radar.ApplyCorner)
+        end,
+    })
 
-tab:Dropdown({
-    Title = "显示位置",
-    Desc = "普通模式下雷达放在哪个角",
-    Values = { "左上", "右上", "左下", "右下" },
-    Value = Settings.Position,
-    Callback = function(v)
-        Settings.Position = v
-        pcall(Radar.ApplyPosition)
-    end,
-})
+    Tab:Button({
+        Title = "放大/还原雷达",
+        Desc = "和雷达上的 +/- 按钮一样",
+        Callback = function()
+            Settings.Zoomed = not Settings.Zoomed
+            pcall(Radar.ApplyZoom)
+        end,
+    })
 
-tab:Slider({
-    Title = "圆角程度",
-    Desc = "越高越圆，100 为圆形",
-    Step = 1,
-    Value = { Min = 0, Max = 100, Default = Settings.Corner },
-    Callback = function(v)
-        Settings.Corner = v
-        pcall(Radar.ApplyCorner)
-    end,
-})
+    Tab:Toggle({
+        Title = "显示敌人",
+        Desc = "红色亮点",
+        Value = Settings.ShowEnemy,
+        Callback = function(v)
+            Settings.ShowEnemy = v
+        end,
+    })
 
-tab:Button({
-    Title = "放大/还原雷达",
-    Desc = "和雷达上的 + / - 按钮一样",
-    Callback = function()
-        Settings.Zoomed = not Settings.Zoomed
-        pcall(Radar.ApplyZoom)
-    end,
-})
+    Tab:Toggle({
+        Title = "显示队友",
+        Desc = "绿色亮点",
+        Value = Settings.ShowTeam,
+        Callback = function(v)
+            Settings.ShowTeam = v
+        end,
+    })
 
-tab:Toggle({
-    Title = "显示敌人",
-    Desc = "红色亮点",
-    Value = Settings.ShowEnemy,
-    Callback = function(v)
-        Settings.ShowEnemy = v
-    end,
-})
+    Tab:Toggle({
+        Title = "显示好友",
+        Desc = "黄色亮点",
+        Value = Settings.ShowFriend,
+        Callback = function(v)
+            Settings.ShowFriend = v
+        end,
+    })
 
-tab:Toggle({
-    Title = "显示队友",
-    Desc = "绿色亮点",
-    Value = Settings.ShowTeam,
-    Callback = function(v)
-        Settings.ShowTeam = v
-    end,
-})
+    Tab:Toggle({
+        Title = "显示中立",
+        Desc = "灰色亮点",
+        Value = Settings.ShowNeutral,
+        Callback = function(v)
+            Settings.ShowNeutral = v
+        end,
+    })
+end)
 
-tab:Toggle({
-    Title = "显示好友",
-    Desc = "黄色亮点",
-    Value = Settings.ShowFriend,
-    Callback = function(v)
-        Settings.ShowFriend = v
-    end,
-})
-
-tab:Toggle({
-    Title = "显示中立",
-    Desc = "灰色亮点（未入队/其他玩家）",
-    Value = Settings.ShowNeutral,
-    Callback = function(v)
-        Settings.ShowNeutral = v
-    end,
-})
-
-print("[雷达] 全部加载完成")
-
-WindUI:Notify({
-    Title = "雷达",
-    Content = "加载完成！点雷达右上角 + 放大",
-    Icon = "radar",
-    Duration = 4,
-})
+if not okUI then
+    warn("[雷达] Tab UI 创建失败:", errUI)
+else
+    print("[雷达] 远程脚本加载完成")
+end
