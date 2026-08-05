@@ -1,3 +1,4 @@
+-- 范围放大（参考 BS-loves_you.lua 的"范围"功能）
 -- 把其他玩家的 HumanoidRootPart 放大成可自由调节大小的红色半透明立方体
 -- 因为是真实根部件：射线子弹、Touched 近战都能正常命中
 print("[范围放大] 开始执行")
@@ -50,6 +51,7 @@ local function snapshot(character)
             Color = hrp.Color,
             Material = hrp.Material,
             CanCollide = hrp.CanCollide,
+            Massless = hrp.Massless,
             CanQuery = hrp.CanQuery,
             CanTouch = hrp.CanTouch,
         }
@@ -65,6 +67,7 @@ local function restoreHRP(hrp)
             hrp.Color = old.Color
             hrp.Material = old.Material
             hrp.CanCollide = old.CanCollide
+            hrp.Massless = old.Massless
             hrp.CanQuery = old.CanQuery
             hrp.CanTouch = old.CanTouch
         end)
@@ -91,6 +94,7 @@ local function applyAll()
                     hrp.Material = Enum.Material.Neon
                     hrp.Color = Color3.fromRGB(255, 0, 0)
                     hrp.CanCollide = Config.PhysicalCollide
+                    hrp.Massless = true          -- 零质量：不影响钩子拉人等物理效果
                     hrp.CanQuery = true
                     hrp.CanTouch = true
                 end)
