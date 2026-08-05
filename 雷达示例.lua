@@ -158,6 +158,21 @@ local okOverlay, errOverlay = pcall(function()
     end
 
     -- ============ 更新逻辑 ============
+    -- 好友关系缓存：每 5 秒刷新一次，避免每帧调用 IsFriendsWith 造成卡顿
+    local friendCache = {}
+    local function refreshFriends()
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= lp then
+                local ok, v = pcall(function()
+                    return p:IsFriendsWith(lp.UserId)
+                end)
+                friendCache[p] = ok and v or false
+            end
+        end
+    end
+
+    pcall(refreshFriends)
+
     local function updateRadar()
         local myChar = lp.Character
         local myHrp = myChar and myChar:FindFirstChild("HumanoidRootPart")
@@ -184,7 +199,7 @@ local okOverlay, errOverlay = pcall(function()
                     local dist = rel.Magnitude
                     if dist <= RADAR_RANGE then
                         -- 分类：好友 > 队友 > 敌人/中立
-                        local isFriend = p:IsFriendsWith(lp.UserId)
+                        local isFriend = friendCache[p] or false
                         local sameTeam = myTeam ~= nil and p.Team == myTeam
                         local cat
                         if isFriend then
@@ -226,13 +241,18 @@ local okOverlay, errOverlay = pcall(function()
         end
     end
 
-    -- 后台循环更新（10Hz，出错不中断）
+    -- 后台每 5 秒刷新好友缓存
     task.spawn(function()
         while true do
-            if Settings.Enabled then
-                pcall(updateRadar)
-            end
-            task.wait(0.1)
+            pcall(refreshFriends)
+            task.wait(5)
+        end
+    end)
+
+    -- 高帧率平滑更新：每帧渲染（数学计算很轻量）
+    RunService.Heartbeat:Connect(function()
+        if Settings.Enabled then
+            pcall(updateRadar)
         end
     end)
 
@@ -252,7 +272,7 @@ if not okOverlay then
 end
 print("[雷达] 覆盖层创建完成")
 
-local Radar = okOverlay
+local Radar = errOverlay
 
 -- ============ WindUI 控制面板 ============
 local win = WindUI:CreateWindow({
@@ -279,7 +299,9 @@ tab:Toggle({
     Value = Settings.Enabled,
     Callback = function(v)
         Settings.Enabled = v
-        Radar.Frame.Visible = v
+        pcall(function()
+            Radar.Frame.Visible = v
+        end)
     end,
 })
 
@@ -290,7 +312,7 @@ tab:Dropdown({
     Value = Settings.Position,
     Callback = function(v)
         Settings.Position = v
-        Radar.ApplyPosition()
+        pcall(Radar.ApplyPosition)
     end,
 })
 
@@ -301,7 +323,7 @@ tab:Slider({
     Value = { Min = 0, Max = 100, Default = Settings.Corner },
     Callback = function(v)
         Settings.Corner = v
-        Radar.ApplyCorner()
+        pcall(Radar.ApplyCorner)
     end,
 })
 
