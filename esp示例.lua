@@ -8,7 +8,7 @@ if not WindUI then
         if not loadstring then
             error("当前环境没有 loadstring（可能不是注入器而是 Studio），无法加载 WindUI")
         end
-        local source = game:GetService("HttpService"):GetAsync("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua")
+        local source = game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua")
         local fn, compileErr = loadstring(source)
         if not fn then
             error(compileErr)
