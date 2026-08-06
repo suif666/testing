@@ -200,6 +200,23 @@ local sortMostBtn = nil
 local sortLeastBtn = nil
 local TweenService = game:GetService("TweenService")
 
+-- 打开列表时隐藏 WindUI 主窗口，防止透明窗口挡掉触摸；关闭时恢复
+local function hideMainWindow()
+    pcall(function()
+        if win and win.UIElements and win.UIElements.Main then
+            win.UIElements.Main.Visible = false
+        end
+    end)
+end
+
+local function showMainWindow()
+    pcall(function()
+        if win and win.UIElements and win.UIElements.Main then
+            win.UIElements.Main.Visible = true
+        end
+    end)
+end
+
 local function clearRows()
     for _, child in ipairs(cardGrid:GetChildren()) do
         if child:IsA("Frame") then
@@ -565,6 +582,7 @@ local function createServerUI()
 
     local ScreenGui = Instance.new("ScreenGui")
     ScreenGui.Name = "ServerBrowserUI"
+    ScreenGui.DisplayOrder = 100
     ScreenGui.ResetOnSpawn = false
     ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     local parented = pcall(function()
@@ -647,6 +665,7 @@ local function createServerUI()
         if ServerUI.Root then
             ServerUI.Root.Visible = false
         end
+        showMainWindow()
     end)
 
     -- 排序按钮组
@@ -718,8 +737,10 @@ local function createServerUI()
 end
 
 local function openServerBrowser()
+    hideMainWindow()
     local ok, err = pcall(createServerUI)
     if not ok then
+        showMainWindow()
         warn("[服务器] 列表界面创建失败:", err)
         notify("服务器列表", "创建失败: " .. tostring(err), "alert-triangle", 5)
         return
@@ -751,6 +772,7 @@ UIS.InputBegan:Connect(function(input, processed)
             closeModal()
         elseif ServerUI.Root then
             ServerUI.Root.Visible = false
+            showMainWindow()
         end
     end
 end)
