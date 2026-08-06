@@ -182,7 +182,7 @@ local FwTab = funcSec:Tab({ Title = "范围类", Icon = "user", Locked = false }
 local SfTab = funcSec:Tab({ Title = "甩飞类", Icon = "user", Locked = false })
 local fyTab = funcSec:Tab({ Title = "翻译类", Icon = "languages", Locked = false })
 local toolTab = funcSec:Tab({ Title = "工具类", Icon = "wrench", Locked = false })
-local amTab = funcSec:Tab({ Title = "自瞄类", Icon = "sliders-horizontal", Locked = false })
+local amTab = funcSec:Tab({ Title = "自瞄类", Locked = false })
 
 -- 视觉类
 local shijueSec = win:Section({ Title = "视觉类", Icon = "palette", Locked = false })
@@ -938,7 +938,12 @@ end
 
 RunService.RenderStepped:Connect(aimbotLoop)
 
-aimTab:Toggle({
+if not aimTab and not toolTab then
+    error("[自瞄] 自瞄类和工具类标签页都没有创建成功")
+end
+local aimUi = aimTab or toolTab
+
+aimUi:Toggle({
     Title = "自瞄开关",
     Desc = "总开关，配合下面的触发方式使用",
     Type = "Checkbox",
@@ -948,7 +953,7 @@ aimTab:Toggle({
     end
 })
 
-aimTab:Toggle({
+aimUi:Toggle({
     Title = "显示FOV圈",
     Desc = "屏幕中心显示瞄准范围圈",
     Type = "Checkbox",
@@ -961,7 +966,7 @@ aimTab:Toggle({
     end
 })
 
-aimTab:Slider({
+aimUi:Slider({
     Title = "FOV范围",
     Desc = "屏幕中心多大范围内会锁定目标",
     Step = 10,
@@ -971,7 +976,7 @@ aimTab:Slider({
     end
 })
 
-aimTab:Slider({
+aimUi:Slider({
     Title = "最大距离",
     Desc = "超过该距离不锁定（米）",
     Step = 50,
@@ -981,7 +986,7 @@ aimTab:Slider({
     end
 })
 
-aimTab:Dropdown({
+aimUi:Dropdown({
     Title = "瞄准部位",
     Values = { "Head", "HumanoidRootPart", "随机" },
     Value = Aimbot.Part,
@@ -990,7 +995,7 @@ aimTab:Dropdown({
     end
 })
 
-aimTab:Dropdown({
+aimUi:Dropdown({
     Title = "触发方式",
     Values = { "一直瞄准", "按住右键", "按住F" },
     Value = Aimbot.Trigger,
@@ -999,7 +1004,7 @@ aimTab:Dropdown({
     end
 })
 
-aimTab:Toggle({
+aimUi:Toggle({
     Title = "队伍检测",
     Desc = "开启后跳过同队玩家",
     Type = "Checkbox",
@@ -1009,7 +1014,7 @@ aimTab:Toggle({
     end
 })
 
-aimTab:Toggle({
+aimUi:Toggle({
     Title = "穿墙自瞄",
     Desc = "开启后有墙挡住就不会锁定",
     Type = "Checkbox",
@@ -1019,7 +1024,7 @@ aimTab:Toggle({
     end
 })
 
-aimTab:Slider({
+aimUi:Slider({
     Title = "平滑度",
     Desc = "越低越平滑，1 = 瞬间转向",
     Step = 0.05,
@@ -1029,7 +1034,7 @@ aimTab:Slider({
     end
 })
 
-aimTab:Slider({
+aimUi:Slider({
     Title = "预判(秒)",
     Desc = "0 = 关闭；预测移动目标的位置（参考 Xa 的预判）",
     Step = 0.05,
