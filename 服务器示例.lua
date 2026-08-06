@@ -67,7 +67,6 @@ local adminListText
 local browserServers = {}
 local UIS = game:GetService("UserInputService")
 local ServerUI = { Root = nil }
-local listFrame = nil
 local statusLabel = nil
 local searchBox = nil
 local refreshBtn = nil
@@ -157,7 +156,8 @@ local function fetchAllServers()
     local all = {}
     local cursor = nil
 
-    for page = 1, 20 do
+    -- 3 秒一刷新，为了不触发接口限流，每轮最多拉 2 页（约 200 个）
+    for page = 1, 2 do
         local url = "https://games.roblox.com/v1/games/"
             .. PlaceId
             .. "/servers/Public?limit=100&sortOrder=Desc"
@@ -176,7 +176,7 @@ local function fetchAllServers()
         cursor = data.nextPageCursor
         setStatus("正在获取服务器... 第 " .. page .. " 页（已获取 " .. #all .. " 个）")
         if not cursor then break end
-        task.wait(0.4)
+        task.wait(0.2)
     end
 
     -- 按在线人数从多到少排序
@@ -186,191 +186,151 @@ local function fetchAllServers()
     return all
 end
 
--- ===== 自定义服务器列表界面（参考 Suture UI 示例） =====
+-- ===== 自定义服务器列表界面（全屏网格版） =====
 local refreshing = false
-local currentInfo = nil
-local currentPlayers = nil
+local currentBar = nil
+local cardGrid = nil
+local gridLayout = nil
+local modalRoot = nil
+local modalDetail = nil
+local pendingJoin = nil
+local lastSig = nil
 local TweenService = game:GetService("TweenService")
 
 local function clearRows()
-    for _, child in ipairs(listFrame:GetChildren()) do
-        if child:IsA("Frame") or child:IsA("TextLabel") then
+    for _, child in ipairs(cardGrid:GetChildren()) do
+        if child:IsA("Frame") then
             child:Destroy()
         end
     end
 end
 
-local function createCurrentCard()
-    local card = Instance.new("Frame")
-    card.Name = "CurrentCard"
-    card.Size = UDim2.new(1, 0, 0, 0)
-    card.AutomaticSize = Enum.AutomaticSize.Y
-    card.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
-    card.BorderSizePixel = 0
-    card.Parent = listFrame
-    Instance.new("UICorner", card).CornerRadius = UDim.new(0, 12)
-    local stroke = Instance.new("UIStroke", card)
-    stroke.Color = Color3.fromRGB(38, 38, 48)
-    stroke.Thickness = 1
-    local pad = Instance.new("UIPadding", card)
-    pad.PaddingTop = UDim.new(0, 14)
-    pad.PaddingBottom = UDim.new(0, 14)
-    pad.PaddingLeft = UDim.new(0, 16)
-    pad.PaddingRight = UDim.new(0, 16)
-    local layout = Instance.new("UIListLayout", card)
-    layout.SortOrder = Enum.SortOrder.LayoutOrder
-    layout.Padding = UDim.new(0, 8)
-
-    local cap = Instance.new("TextLabel")
-    cap.Size = UDim2.new(1, 0, 0, 18)
-    cap.BackgroundTransparency = 1
-    cap.Text = "当前服务器"
-    cap.TextColor3 = Color3.fromRGB(150, 150, 170)
-    cap.TextSize = 12
-    cap.Font = Enum.Font.GothamMedium
-    cap.TextXAlignment = Enum.TextXAlignment.Left
-    cap.Parent = card
-
-    currentInfo = Instance.new("TextLabel")
-    currentInfo.Size = UDim2.new(1, 0, 0, 0)
-    currentInfo.AutomaticSize = Enum.AutomaticSize.Y
-    currentInfo.BackgroundTransparency = 1
-    currentInfo.Text = "人数: - / -\n你的Ping: -ms\n房间ID: -\n游戏: -"
-    currentInfo.TextColor3 = Color3.fromRGB(220, 220, 230)
-    currentInfo.TextSize = 14
-    currentInfo.Font = Enum.Font.Gotham
-    currentInfo.TextXAlignment = Enum.TextXAlignment.Left
-    currentInfo.TextYAlignment = Enum.TextYAlignment.Top
-    currentInfo.Parent = card
-
-    local pcap = Instance.new("TextLabel")
-    pcap.Size = UDim2.new(1, 0, 0, 18)
-    pcap.BackgroundTransparency = 1
-    pcap.Text = "服务器玩家"
-    pcap.TextColor3 = Color3.fromRGB(140, 140, 155)
-    pcap.TextSize = 12
-    pcap.Font = Enum.Font.GothamMedium
-    pcap.TextXAlignment = Enum.TextXAlignment.Left
-    pcap.Parent = card
-
-    currentPlayers = Instance.new("TextLabel")
-    currentPlayers.Size = UDim2.new(1, 0, 0, 0)
-    currentPlayers.AutomaticSize = Enum.AutomaticSize.Y
-    currentPlayers.BackgroundTransparency = 1
-    currentPlayers.Text = "加载中..."
-    currentPlayers.TextColor3 = Color3.fromRGB(200, 200, 210)
-    currentPlayers.TextSize = 13
-    currentPlayers.Font = Enum.Font.Gotham
-    currentPlayers.TextXAlignment = Enum.TextXAlignment.Left
-    currentPlayers.TextWrapped = true
-    currentPlayers.Parent = card
-end
-
-local function createSectionTitle(text)
-    local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1, 0, 0, 22)
-    title.BackgroundTransparency = 1
-    title.Text = text
-    title.TextColor3 = Color3.fromRGB(160, 160, 175)
-    title.TextSize = 13
-    title.Font = Enum.Font.GothamMedium
-    title.TextXAlignment = Enum.TextXAlignment.Left
-    title.Parent = listFrame
+-- 根据屏幕宽度算方形卡片尺寸（手机 3 列 / 平板 4 列 / 电脑 5 列）
+local function computeCell()
+    local viewport = (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize) or Vector2.new(1280, 720)
+    local gap = 10
+    local sidePad = 24
+    local cols = viewport.X > 900 and 5 or (viewport.X > 600 and 4 or 3)
+    local cell = math.clamp((viewport.X - sidePad * 2 - gap * (cols - 1)) / cols, 90, 170)
+    return cell, gap
 end
 
 local function createServerCard(server, recommended)
     local card = Instance.new("Frame")
     card.Name = "ServerCard"
-    card.Size = UDim2.new(1, 0, 0, 64)
     card.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
     card.BorderSizePixel = 0
-    card.Parent = listFrame
+    card.Parent = cardGrid
     Instance.new("UICorner", card).CornerRadius = UDim.new(0, 12)
     local stroke = Instance.new("UIStroke", card)
-    stroke.Color = recommended and Color3.fromRGB(108, 92, 231) or Color3.fromRGB(38, 38, 48)
+    stroke.Color = recommended and Color3.fromRGB(108, 92, 231) or Color3.fromRGB(40, 40, 50)
     stroke.Thickness = 1
 
-    local nameLabel = Instance.new("TextLabel")
-    nameLabel.Size = UDim2.new(0.62, 0, 0, 20)
-    nameLabel.Position = UDim2.new(0, 16, 0, 12)
-    nameLabel.BackgroundTransparency = 1
-    nameLabel.Text = "服务器 " .. tostring(server.id):sub(1, 8) .. (recommended and " · 推荐" or "")
-    nameLabel.TextColor3 = Color3.fromRGB(240, 240, 245)
-    nameLabel.TextSize = 14
-    nameLabel.Font = Enum.Font.GothamBold
-    nameLabel.TextXAlignment = Enum.TextXAlignment.Left
-    nameLabel.Parent = card
+    local pad = Instance.new("UIPadding", card)
+    pad.PaddingTop = UDim.new(0, 8)
+    pad.PaddingBottom = UDim.new(0, 8)
+    pad.PaddingLeft = UDim.new(0, 8)
+    pad.PaddingRight = UDim.new(0, 8)
 
-    local infoText = string.format("人数: %d / %d", server.playing, server.maxPlayers)
-    if type(server.ping) == "number" then
-        infoText = infoText .. string.format("   Ping: %dms", math.floor(server.ping))
-    end
-    if server.region then
-        infoText = infoText .. "   地区: " .. tostring(server.region)
-    end
-    local infoLabel = Instance.new("TextLabel")
-    infoLabel.Size = UDim2.new(0.72, 0, 0, 18)
-    infoLabel.Position = UDim2.new(0, 16, 0, 34)
-    infoLabel.BackgroundTransparency = 1
-    infoLabel.Text = infoText
-    infoLabel.TextColor3 = Color3.fromRGB(150, 150, 165)
-    infoLabel.TextSize = 12
-    infoLabel.Font = Enum.Font.Gotham
-    infoLabel.TextXAlignment = Enum.TextXAlignment.Left
-    infoLabel.Parent = card
+    -- ID（蓝色）
+    local idLabel = Instance.new("TextLabel")
+    idLabel.Size = UDim2.new(1, 0, 0, 18)
+    idLabel.Position = UDim2.new(0, 0, 0, 0)
+    idLabel.BackgroundTransparency = 1
+    idLabel.Text = tostring(server.id):sub(1, 8) .. (recommended and " ★" or "")
+    idLabel.TextColor3 = Color3.fromRGB(80, 180, 255)
+    idLabel.TextSize = 13
+    idLabel.Font = Enum.Font.GothamBold
+    idLabel.TextXAlignment = Enum.TextXAlignment.Center
+    idLabel.Parent = card
 
-    local joinBtn = Instance.new("TextButton")
-    joinBtn.Size = UDim2.new(0, 72, 0, 32)
-    joinBtn.Position = UDim2.new(1, -88, 0.5, -16)
-    joinBtn.BackgroundColor3 = Color3.fromRGB(108, 92, 231)
-    joinBtn.BorderSizePixel = 0
-    joinBtn.Text = "加入"
-    joinBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    joinBtn.TextSize = 13
-    joinBtn.Font = Enum.Font.GothamBold
-    joinBtn.Parent = card
-    Instance.new("UICorner", joinBtn).CornerRadius = UDim.new(0, 8)
-    joinBtn.MouseEnter:Connect(function()
-        TweenService:Create(joinBtn, TweenInfo.new(0.15), { BackgroundColor3 = Color3.fromRGB(130, 110, 245) }):Play()
+    -- 人数（绿→红按满员率变色）
+    local ratio = server.maxPlayers > 0 and (server.playing / server.maxPlayers) or 0
+    local countLabel = Instance.new("TextLabel")
+    countLabel.Size = UDim2.new(1, 0, 0, 34)
+    countLabel.Position = UDim2.new(0, 0, 0, 18)
+    countLabel.BackgroundTransparency = 1
+    countLabel.Text = server.playing .. "/" .. server.maxPlayers
+    countLabel.TextColor3 = Color3.fromHSV((1 - ratio) * 0.35, 0.8, 1)
+    countLabel.TextSize = 20
+    countLabel.Font = Enum.Font.GothamBold
+    countLabel.TextXAlignment = Enum.TextXAlignment.Center
+    countLabel.Parent = card
+
+    -- Ping（橙色）
+    local pingLabel = Instance.new("TextLabel")
+    pingLabel.Size = UDim2.new(1, 0, 0, 18)
+    pingLabel.Position = UDim2.new(0, 0, 0, 52)
+    pingLabel.BackgroundTransparency = 1
+    pingLabel.Text = type(server.ping) == "number" and (math.floor(server.ping) .. "ms") or "--"
+    pingLabel.TextColor3 = Color3.fromRGB(255, 170, 60)
+    pingLabel.TextSize = 13
+    pingLabel.Font = Enum.Font.GothamBold
+    pingLabel.TextXAlignment = Enum.TextXAlignment.Center
+    pingLabel.Parent = card
+
+    -- 底部提示（灰色）
+    local regionLabel = Instance.new("TextLabel")
+    regionLabel.Size = UDim2.new(1, 0, 0, 16)
+    regionLabel.Position = UDim2.new(0, 0, 1, -16)
+    regionLabel.BackgroundTransparency = 1
+    regionLabel.Text = server.region and tostring(server.region) or "点击查看"
+    regionLabel.TextColor3 = Color3.fromRGB(130, 130, 145)
+    regionLabel.TextSize = 11
+    regionLabel.Font = Enum.Font.Gotham
+    regionLabel.TextXAlignment = Enum.TextXAlignment.Center
+    regionLabel.Parent = card
+
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 1, 0)
+    btn.BackgroundTransparency = 1
+    btn.BorderSizePixel = 0
+    btn.Text = ""
+    btn.Parent = card
+    btn.Activated:Connect(function()
+        openJoinModal(server, recommended)
     end)
-    joinBtn.MouseLeave:Connect(function()
-        TweenService:Create(joinBtn, TweenInfo.new(0.15), { BackgroundColor3 = Color3.fromRGB(108, 92, 231) }):Play()
+    local function press(active)
+        card.BackgroundColor3 = active
+            and Color3.fromRGB(28, 30, 40)
+            or Color3.fromRGB(20, 20, 28)
+    end
+    btn.MouseEnter:Connect(function() press(true) end)
+    btn.MouseLeave:Connect(function() press(false) end)
+    btn.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch then
+            press(true)
+        end
     end)
-    joinBtn.Activated:Connect(function()
-        statusLabel.Text = "正在加入 " .. tostring(server.id) .. "（在线 " .. server.playing .. "/" .. server.maxPlayers .. "）..."
-        notify("正在加入", "在线 " .. server.playing .. "/" .. server.maxPlayers, "arrow-right", 3)
-        TeleportService:TeleportToPlaceInstance(PlaceId, server.id)
+    btn.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch then
+            press(false)
+        end
     end)
 end
 
 local function buildCurrentInfo()
-    if not currentInfo or not currentPlayers then return end
+    if not currentBar then return end
     local players = Players:GetPlayers()
     local lp = Players.LocalPlayer
     local pingMs = 0
     pcall(function()
         pingMs = math.floor(lp:GetNetworkPing() * 1000)
     end)
-    currentInfo.Text = "人数: " .. #players .. " / " .. Players.MaxPlayers
-        .. "\n你的Ping: " .. pingMs .. "ms"
-        .. "\n房间ID: " .. (game.JobId or "无")
-        .. "\n游戏: " .. game.Name
-    local names = {}
-    for _, p in ipairs(players) do
-        table.insert(names, p.DisplayName)
-    end
-    if #names == 0 then
-        currentPlayers.Text = "只有你一个人"
-    else
-        currentPlayers.Text = table.concat(names, ", ")
-    end
+    currentBar.Text = "本服: " .. #players .. " / " .. Players.MaxPlayers
+        .. "   ·   Ping " .. pingMs .. "ms"
+        .. "   ·   房间ID: " .. (game.JobId or "无")
+        .. "   ·   " .. game.Name
 end
 
 local function buildList()
     clearRows()
-    createCurrentCard()
+    local cell, gap = computeCell()
+    if gridLayout then
+        gridLayout.CellSize = UDim2.fromOffset(cell, cell)
+        gridLayout.CellPadding = UDim2.fromOffset(gap, gap)
+    end
     buildCurrentInfo()
-    createSectionTitle("其他服务器")
 
     local query = searchBox.Text:lower()
     local shown = 0
@@ -385,7 +345,7 @@ local function buildList()
         if query == "" or id:find(query, 1, true) then
             createServerCard(s, #browserServers > 1 and s == recommended)
             shown = shown + 1
-            if shown >= 800 then break end
+            if shown >= 300 then break end
         end
     end
 
@@ -397,8 +357,16 @@ local function buildList()
         local suffix = ""
         if searchBox.Text ~= "" then suffix = "（筛选结果）" end
         statusLabel.Text = "共 " .. #browserServers .. " 个可用服务器，显示前 " .. shown .. " 个" .. suffix
-            .. " · " .. os.date("%H:%M:%S") .. " · 30秒自动刷新"
+            .. " · " .. os.date("%H:%M:%S") .. " · 3秒自动刷新"
     end
+end
+
+local function listSignature(list)
+    local sig = #list
+    for i = 1, math.min(#list, 8) do
+        sig = sig * 31 + (list[i].playing or 0)
+    end
+    return sig
 end
 
 local function uiRefresh()
@@ -406,7 +374,7 @@ local function uiRefresh()
     if refreshing then return end
     refreshing = true
     refreshBtn.Text = "获取中..."
-    statusLabel.Text = "正在获取服务器列表（30秒自动刷新）..."
+    statusLabel.Text = "正在获取服务器列表（3秒自动刷新）..."
     task.spawn(function()
         local ok, list = pcall(fetchAllServers)
         refreshing = false
@@ -417,8 +385,129 @@ local function uiRefresh()
         end
         browserServers = list
         lastBrowserFetch = os.clock()
-        buildList()
-        notify("服务器列表", "找到 " .. #list .. " 个可用服务器", "check", 3)
+        local sig = listSignature(list)
+        if sig ~= lastSig then
+            lastSig = sig
+            buildList()
+        else
+            buildCurrentInfo()
+        end
+        statusLabel.Text = "共 " .. #list .. " 个可用服务器 · " .. os.date("%H:%M:%S") .. " · 3秒自动刷新"
+    end)
+end
+
+-- ===== 二级确认弹窗 =====
+local function closeModal()
+    if modalRoot then
+        modalRoot.Visible = false
+    end
+end
+
+local function openJoinModal(server, recommended)
+    if not modalRoot then return end
+    pendingJoin = server
+    local pingText = type(server.ping) == "number" and (math.floor(server.ping) .. "ms") or "未知"
+    local regionText = server.region and tostring(server.region) or "未知"
+    local ratio = server.maxPlayers > 0 and (server.playing / server.maxPlayers) or 0
+    local recText = recommended and "\n<font color='#6c5ce7'>★ 推荐服务器</font>" or ""
+    modalDetail.Text = "<font color='#50b4ff'>服务器ID: " .. tostring(server.id) .. "</font>"
+        .. "\n<font color='#55ff88'>人数: " .. server.playing .. " / " .. server.maxPlayers
+        .. "（" .. math.floor(ratio * 100) .. "%）</font>"
+        .. "\n<font color='#ffaa3c'>Ping: " .. pingText .. "</font>"
+        .. "\n<font color='#9aa0b5'>地区: " .. regionText .. "</font>"
+        .. recText
+    modalRoot.Visible = true
+end
+
+local function createModal(screenGui)
+    modalRoot = Instance.new("Frame")
+    modalRoot.Name = "JoinModal"
+    modalRoot.Size = UDim2.new(1, 0, 1, 0)
+    modalRoot.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    modalRoot.BackgroundTransparency = 0.5
+    modalRoot.Visible = false
+    modalRoot.ZIndex = 10
+    modalRoot.Parent = screenGui
+
+    local dimBtn = Instance.new("TextButton")
+    dimBtn.Size = UDim2.new(1, 0, 1, 0)
+    dimBtn.BackgroundTransparency = 1
+    dimBtn.Text = ""
+    dimBtn.Parent = modalRoot
+    dimBtn.Activated:Connect(closeModal)
+
+    local panel = Instance.new("Frame")
+    panel.Size = UDim2.new(0, 320, 0, 252)
+    panel.AnchorPoint = Vector2.new(0.5, 0.5)
+    panel.Position = UDim2.new(0.5, 0, 0.5, 0)
+    panel.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+    panel.BorderSizePixel = 0
+    panel.Parent = modalRoot
+    Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 16)
+    local pStroke = Instance.new("UIStroke", panel)
+    pStroke.Color = Color3.fromRGB(108, 92, 231)
+    pStroke.Thickness = 1
+
+    local pTitle = Instance.new("TextLabel")
+    pTitle.Size = UDim2.new(1, 0, 0, 46)
+    pTitle.BackgroundTransparency = 1
+    pTitle.Text = "加入服务器？"
+    pTitle.TextColor3 = Color3.fromRGB(240, 240, 245)
+    pTitle.TextSize = 18
+    pTitle.Font = Enum.Font.GothamBold
+    pTitle.Parent = panel
+
+    modalDetail = Instance.new("TextLabel")
+    modalDetail.Size = UDim2.new(1, -40, 0, 130)
+    modalDetail.Position = UDim2.new(0, 20, 0, 48)
+    modalDetail.BackgroundTransparency = 1
+    modalDetail.RichText = true
+    modalDetail.Text = "请选择服务器"
+    modalDetail.TextColor3 = Color3.fromRGB(220, 220, 230)
+    modalDetail.TextSize = 14
+    modalDetail.Font = Enum.Font.Gotham
+    modalDetail.TextXAlignment = Enum.TextXAlignment.Left
+    modalDetail.TextYAlignment = Enum.TextYAlignment.Top
+    modalDetail.Parent = panel
+
+    local cancelBtn = Instance.new("TextButton")
+    cancelBtn.Size = UDim2.new(0, 110, 0, 38)
+    cancelBtn.Position = UDim2.new(0, 20, 1, -52)
+    cancelBtn.BackgroundColor3 = Color3.fromRGB(36, 36, 46)
+    cancelBtn.BorderSizePixel = 0
+    cancelBtn.Text = "取消"
+    cancelBtn.TextColor3 = Color3.fromRGB(200, 200, 210)
+    cancelBtn.TextSize = 14
+    cancelBtn.Font = Enum.Font.GothamBold
+    cancelBtn.Parent = panel
+    Instance.new("UICorner", cancelBtn).CornerRadius = UDim.new(0, 8)
+    cancelBtn.Activated:Connect(closeModal)
+
+    local confirmBtn = Instance.new("TextButton")
+    confirmBtn.Size = UDim2.new(0, 130, 0, 38)
+    confirmBtn.Position = UDim2.new(1, -150, 1, -52)
+    confirmBtn.BackgroundColor3 = Color3.fromRGB(108, 92, 231)
+    confirmBtn.BorderSizePixel = 0
+    confirmBtn.Text = "确认加入"
+    confirmBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    confirmBtn.TextSize = 14
+    confirmBtn.Font = Enum.Font.GothamBold
+    confirmBtn.Parent = panel
+    Instance.new("UICorner", confirmBtn).CornerRadius = UDim.new(0, 8)
+    confirmBtn.MouseEnter:Connect(function()
+        TweenService:Create(confirmBtn, TweenInfo.new(0.15), { BackgroundColor3 = Color3.fromRGB(130, 110, 245) }):Play()
+    end)
+    confirmBtn.MouseLeave:Connect(function()
+        TweenService:Create(confirmBtn, TweenInfo.new(0.15), { BackgroundColor3 = Color3.fromRGB(108, 92, 231) }):Play()
+    end)
+    confirmBtn.Activated:Connect(function()
+        local srv = pendingJoin
+        closeModal()
+        if srv then
+            statusLabel.Text = "正在加入 " .. tostring(srv.id) .. "（在线 " .. srv.playing .. "/" .. srv.maxPlayers .. "）..."
+            notify("正在加入", "在线 " .. srv.playing .. "/" .. srv.maxPlayers, "arrow-right", 3)
+            TeleportService:TeleportToPlaceInstance(PlaceId, srv.id)
+        end
     end)
 end
 
@@ -440,47 +529,55 @@ local function createServerUI()
         ScreenGui.Parent = Players.LocalPlayer:WaitForChild("PlayerGui")
     end
 
-    local cam = workspace.CurrentCamera
-    local viewport = cam and cam.ViewportSize or Vector2.new(1280, 720)
-    local winW = math.clamp(viewport.X - 24, 300, 560)
-    local winH = math.clamp(viewport.Y * 0.78, 400, 720)
-
+    -- 全屏半透明背景
     local root = Instance.new("Frame")
     root.Name = "Main"
-    root.Size = UDim2.fromOffset(winW, winH)
-    root.Position = UDim2.new(0.5, -winW / 2, 0.5, -winH / 2)
-    root.BackgroundColor3 = Color3.fromRGB(12, 12, 16)
+    root.Size = UDim2.new(1, 0, 1, 0)
+    root.BackgroundColor3 = Color3.fromRGB(6, 7, 10)
+    root.BackgroundTransparency = 0.18
     root.BorderSizePixel = 0
     root.Parent = ScreenGui
-    Instance.new("UICorner", root).CornerRadius = UDim.new(0, 16)
-    local stroke = Instance.new("UIStroke", root)
-    stroke.Color = Color3.fromRGB(40, 40, 50)
-    stroke.Thickness = 1
 
-    local titleBar = Instance.new("Frame")
-    titleBar.Name = "TitleBar"
-    titleBar.Size = UDim2.new(1, 0, 0, 48)
-    titleBar.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
-    titleBar.BorderSizePixel = 0
-    titleBar.Parent = root
-    Instance.new("UICorner", titleBar).CornerRadius = UDim.new(0, 16)
-    local topFix = Instance.new("Frame")
-    topFix.Size = UDim2.new(1, 0, 0, 20)
-    topFix.Position = UDim2.new(0, 0, 1, -20)
-    topFix.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
-    topFix.BorderSizePixel = 0
-    topFix.Parent = titleBar
+    -- 顶部栏
+    local header = Instance.new("Frame")
+    header.Name = "Header"
+    header.Size = UDim2.new(1, 0, 0, 54)
+    header.BackgroundColor3 = Color3.fromRGB(10, 10, 14)
+    header.BackgroundTransparency = 0.25
+    header.BorderSizePixel = 0
+    header.Parent = root
 
     local titleLabel = Instance.new("TextLabel")
-    titleLabel.Size = UDim2.new(1, -140, 1, 0)
-    titleLabel.Position = UDim2.new(0, 18, 0, 0)
+    titleLabel.Size = UDim2.new(0.34, -20, 1, 0)
+    titleLabel.Position = UDim2.new(0, 16, 0, 0)
     titleLabel.BackgroundTransparency = 1
     titleLabel.Text = "Suture Hub · 服务器选择"
     titleLabel.TextColor3 = Color3.fromRGB(240, 240, 245)
-    titleLabel.TextSize = 16
+    titleLabel.TextSize = 17
     titleLabel.Font = Enum.Font.GothamBold
     titleLabel.TextXAlignment = Enum.TextXAlignment.Left
-    titleLabel.Parent = titleBar
+    titleLabel.Parent = header
+
+    searchBox = Instance.new("TextBox")
+    searchBox.Size = UDim2.new(0.3, -10, 0, 36)
+    searchBox.Position = UDim2.new(0.36, 0, 0.5, -18)
+    searchBox.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
+    searchBox.BorderSizePixel = 0
+    searchBox.PlaceholderText = "搜索服务器ID...（回车）"
+    searchBox.PlaceholderColor3 = Color3.fromRGB(110, 110, 125)
+    searchBox.Text = ""
+    searchBox.TextColor3 = Color3.fromRGB(230, 230, 238)
+    searchBox.Font = Enum.Font.Gotham
+    searchBox.TextSize = 14
+    searchBox.ClearTextOnFocus = false
+    searchBox.Parent = header
+    Instance.new("UICorner", searchBox).CornerRadius = UDim.new(0, 8)
+    local searchStroke = Instance.new("UIStroke", searchBox)
+    searchStroke.Color = Color3.fromRGB(40, 40, 50)
+    searchStroke.Thickness = 1
+    searchBox.FocusLost:Connect(function()
+        buildList()
+    end)
 
     refreshBtn = Instance.new("TextButton")
     refreshBtn.Size = UDim2.new(0, 60, 0, 32)
@@ -491,7 +588,7 @@ local function createServerUI()
     refreshBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
     refreshBtn.TextSize = 13
     refreshBtn.Font = Enum.Font.GothamBold
-    refreshBtn.Parent = titleBar
+    refreshBtn.Parent = header
     Instance.new("UICorner", refreshBtn).CornerRadius = UDim.new(0, 8)
     refreshBtn.MouseEnter:Connect(function()
         TweenService:Create(refreshBtn, TweenInfo.new(0.15), { BackgroundColor3 = Color3.fromRGB(130, 110, 245) }):Play()
@@ -510,7 +607,7 @@ local function createServerUI()
     closeBtn.TextColor3 = Color3.fromRGB(180, 180, 190)
     closeBtn.TextSize = 15
     closeBtn.Font = Enum.Font.GothamBold
-    closeBtn.Parent = titleBar
+    closeBtn.Parent = header
     Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 8)
     closeBtn.MouseEnter:Connect(function()
         TweenService:Create(closeBtn, TweenInfo.new(0.15), { BackgroundColor3 = Color3.fromRGB(200, 60, 70) }):Play()
@@ -522,46 +619,37 @@ local function createServerUI()
         ServerUI.Root.Visible = false
     end)
 
-    searchBox = Instance.new("TextBox")
-    searchBox.Size = UDim2.new(1, -24, 0, 38)
-    searchBox.Position = UDim2.new(0, 12, 0, 58)
-    searchBox.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
-    searchBox.BorderSizePixel = 0
-    searchBox.PlaceholderText = "搜索服务器ID...（回车应用）"
-    searchBox.PlaceholderColor3 = Color3.fromRGB(110, 110, 125)
-    searchBox.Text = ""
-    searchBox.TextColor3 = Color3.fromRGB(230, 230, 238)
-    searchBox.Font = Enum.Font.Gotham
-    searchBox.TextSize = 14
-    searchBox.ClearTextOnFocus = false
-    searchBox.Parent = root
-    Instance.new("UICorner", searchBox).CornerRadius = UDim.new(0, 8)
-    local searchStroke = Instance.new("UIStroke", searchBox)
-    searchStroke.Color = Color3.fromRGB(40, 40, 50)
-    searchStroke.Thickness = 1
-    searchBox.FocusLost:Connect(function()
-        buildList()
-    end)
+    -- 本服信息条
+    currentBar = Instance.new("TextLabel")
+    currentBar.Size = UDim2.new(1, -24, 0, 24)
+    currentBar.Position = UDim2.new(0, 12, 0, 60)
+    currentBar.BackgroundTransparency = 1
+    currentBar.Font = Enum.Font.Gotham
+    currentBar.TextSize = 13
+    currentBar.TextColor3 = Color3.fromRGB(150, 158, 175)
+    currentBar.TextXAlignment = Enum.TextXAlignment.Left
+    currentBar.Text = "本服信息加载中..."
+    currentBar.Parent = root
 
-    listFrame = Instance.new("ScrollingFrame")
-    listFrame.Size = UDim2.new(1, -24, 1, -118)
-    listFrame.Position = UDim2.new(0, 12, 0, 106)
-    listFrame.BackgroundTransparency = 1
-    listFrame.BorderSizePixel = 0
-    listFrame.ScrollBarThickness = 4
-    listFrame.ScrollBarImageColor3 = Color3.fromRGB(80, 80, 100)
-    listFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
-    listFrame.ScrollingDirection = Enum.ScrollingDirection.Y
-    listFrame.Parent = root
-    local layout = Instance.new("UIListLayout", listFrame)
-    layout.SortOrder = Enum.SortOrder.LayoutOrder
-    layout.Padding = UDim.new(0, 12)
-    local padding = Instance.new("UIPadding", listFrame)
-    padding.PaddingBottom = UDim.new(0, 12)
+    -- 多列网格
+    cardGrid = Instance.new("ScrollingFrame")
+    cardGrid.Size = UDim2.new(1, -24, 1, -120)
+    cardGrid.Position = UDim2.new(0, 12, 0, 90)
+    cardGrid.BackgroundTransparency = 1
+    cardGrid.BorderSizePixel = 0
+    cardGrid.ScrollBarThickness = 4
+    cardGrid.ScrollBarImageColor3 = Color3.fromRGB(80, 80, 100)
+    cardGrid.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    cardGrid.ScrollingDirection = Enum.ScrollingDirection.Y
+    cardGrid.Parent = root
+    gridLayout = Instance.new("UIGridLayout", cardGrid)
+    gridLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    gridLayout.FillDirection = Enum.FillDirection.Horizontal
+    gridLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 
     statusLabel = Instance.new("TextLabel")
-    statusLabel.Size = UDim2.new(1, -24, 0, 26)
-    statusLabel.Position = UDim2.new(0, 12, 1, -32)
+    statusLabel.Size = UDim2.new(1, -24, 0, 24)
+    statusLabel.Position = UDim2.new(0, 12, 1, -28)
     statusLabel.BackgroundTransparency = 1
     statusLabel.Font = Enum.Font.Gotham
     statusLabel.TextSize = 12
@@ -571,62 +659,26 @@ local function createServerUI()
     statusLabel.Text = "等待刷新"
     statusLabel.Parent = root
 
-    -- 拖动窗口（鼠标 + 触摸，可拖到屏幕顶）
-    local dragging = false
-    local dragOffset = Vector2.zero
-    titleBar.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-            or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            local pos = input.Position
-            if typeof(pos) == "Vector3" then
-                pos = Vector2.new(pos.X, pos.Y)
-            end
-            dragOffset = pos - root.AbsolutePosition
-        end
-    end)
-    UIS.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-            or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = false
-        end
-    end)
-    UIS.InputChanged:Connect(function(input)
-        if not dragging then return end
-        local vp = (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize) or Vector2.new(1280, 720)
-        if input.UserInputType == Enum.UserInputType.Touch then
-            local delta = input.Delta
-            root.Position = UDim2.fromOffset(
-                math.clamp(root.AbsolutePosition.X + delta.X, -root.AbsoluteSize.X + 80, vp.X - 80),
-                math.clamp(root.AbsolutePosition.Y + delta.Y, 0, vp.Y - 60)
-            )
-        elseif input.UserInputType == Enum.UserInputType.MouseMovement then
-            local pos = input.Position
-            if typeof(pos) == "Vector3" then
-                pos = Vector2.new(pos.X, pos.Y)
-            end
-            local newPos = pos - dragOffset
-            root.Position = UDim2.fromOffset(
-                math.clamp(newPos.X, -root.AbsoluteSize.X + 80, vp.X - 80),
-                math.clamp(newPos.Y, 0, vp.Y - 60)
-            )
-        end
-    end)
-
     UIS.InputBegan:Connect(function(input, processed)
         if processed then return end
-        if input.KeyCode == Enum.KeyCode.Escape and ServerUI.Root and ServerUI.Root.Visible then
-            ServerUI.Root.Visible = false
+        if input.KeyCode == Enum.KeyCode.Escape then
+            if modalRoot and modalRoot.Visible then
+                closeModal()
+            elseif ServerUI.Root and ServerUI.Root.Visible then
+                ServerUI.Root.Visible = false
+            end
         end
     end)
 
     ServerUI.Root = root
+    ServerUI.ScreenGui = ScreenGui
+    createModal(ScreenGui)
     buildList()
 
-    -- 30 秒自动刷新（窗口可见时）
+    -- 3 秒自动刷新（窗口可见时）
     task.spawn(function()
         while true do
-            task.wait(30)
+            task.wait(3)
             if ServerUI.Root and ServerUI.Root.Visible then
                 uiRefresh()
             end
@@ -636,7 +688,7 @@ end
 
 local function openServerBrowser()
     createServerUI()
-    if os.clock() - lastBrowserFetch > 30 or #browserServers == 0 then
+    if os.clock() - lastBrowserFetch > 3 or #browserServers == 0 then
         uiRefresh()
     else
         buildList()
