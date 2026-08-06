@@ -69,7 +69,6 @@ local UIS = game:GetService("UserInputService")
 local ServerUI = { Root = nil }
 local statusLabel = nil
 local searchBox = nil
-local refreshBtn = nil
 local lastBrowserFetch = 0
 
 local function notify(title, content, icon, duration)
@@ -188,13 +187,17 @@ end
 
 -- ===== 自定义服务器列表界面（全屏网格版） =====
 local refreshing = false
-local currentBar = nil
 local cardGrid = nil
 local gridLayout = nil
 local modalRoot = nil
 local modalDetail = nil
 local pendingJoin = nil
 local lastSig = nil
+local SortMode = "人数最多"
+local serverIndex = 0
+local sortPingBtn = nil
+local sortMostBtn = nil
+local sortLeastBtn = nil
 local TweenService = game:GetService("TweenService")
 
 local function clearRows()
@@ -215,11 +218,63 @@ local function computeCell()
     return cell, gap
 end
 
+local function getGameName()
+    local name = game.Name
+    pcall(function()
+        local info = game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId)
+        if info and info.Name and info.Name ~= "" then
+            name = info.Name
+        end
+    end)
+    return name
+end
+
+local function currentLine()
+    local players = Players:GetPlayers()
+    local lp = Players.LocalPlayer
+    local pingMs = 0
+    pcall(function()
+        pingMs = math.floor(lp:GetNetworkPing() * 1000)
+    end)
+    return "本服: " .. #players .. "/" .. Players.MaxPlayers
+        .. " · Ping " .. pingMs .. "ms"
+        .. " · 房间ID: " .. (game.JobId or "无")
+        .. " · " .. getGameName()
+end
+
+local function sortServers(list)
+    table.sort(list, function(a, b)
+        if SortMode == "ping最低" then
+            local pa = type(a.ping) == "number" and a.ping or math.huge
+            local pb = type(b.ping) == "number" and b.ping or math.huge
+            return pa < pb
+        elseif SortMode == "人数最少" then
+            return a.playing < b.playing
+        end
+        return a.playing > b.playing
+    end)
+end
+
+local function updateSortButtons()
+    if not sortPingBtn then return end
+    local activeC = Color3.fromRGB(108, 92, 231)
+    local idleC = Color3.fromRGB(30, 30, 38)
+    sortPingBtn.BackgroundColor3 = SortMode == "ping最低" and activeC or idleC
+    sortMostBtn.BackgroundColor3 = SortMode == "人数最多" and activeC or idleC
+    sortLeastBtn.BackgroundColor3 = SortMode == "人数最少" and activeC or idleC
+end
+
+-- 卡片本身就是一个按钮，手机端也能点
 local function createServerCard(server, recommended)
-    local card = Instance.new("Frame")
+    serverIndex = serverIndex + 1
+
+    local card = Instance.new("TextButton")
     card.Name = "ServerCard"
+    card.Size = UDim2.new(1, 0, 1, 0)
     card.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
     card.BorderSizePixel = 0
+    card.AutoButtonColor = false
+    card.Text = ""
     card.Parent = cardGrid
     Instance.new("UICorner", card).CornerRadius = UDim.new(0, 12)
     local stroke = Instance.new("UIStroke", card)
@@ -232,12 +287,12 @@ local function createServerCard(server, recommended)
     pad.PaddingLeft = UDim.new(0, 8)
     pad.PaddingRight = UDim.new(0, 8)
 
-    -- ID（蓝色）
+    -- 编号（蓝色）
     local idLabel = Instance.new("TextLabel")
     idLabel.Size = UDim2.new(1, 0, 0, 18)
     idLabel.Position = UDim2.new(0, 0, 0, 0)
     idLabel.BackgroundTransparency = 1
-    idLabel.Text = tostring(server.id):sub(1, 8) .. (recommended and " ★" or "")
+    idLabel.Text = "服务器" .. serverIndex .. (recommended and " ★" or "")
     idLabel.TextColor3 = Color3.fromRGB(80, 180, 255)
     idLabel.TextSize = 13
     idLabel.Font = Enum.Font.GothamBold
@@ -281,46 +336,36 @@ local function createServerCard(server, recommended)
     regionLabel.TextXAlignment = Enum.TextXAlignment.Center
     regionLabel.Parent = card
 
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, 0, 1, 0)
-    btn.BackgroundTransparency = 1
-    btn.BorderSizePixel = 0
-    btn.Text = ""
-    btn.Parent = card
-    btn.Activated:Connect(function()
-        openJoinModal(server, recommended)
-    end)
     local function press(active)
         card.BackgroundColor3 = active
             and Color3.fromRGB(28, 30, 40)
             or Color3.fromRGB(20, 20, 28)
     end
-    btn.MouseEnter:Connect(function() press(true) end)
-    btn.MouseLeave:Connect(function() press(false) end)
-    btn.InputBegan:Connect(function(input)
+    card.MouseEnter:Connect(function() press(true) end)
+    card.MouseLeave:Connect(function() press(false) end)
+    card.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.Touch then
             press(true)
         end
     end)
-    btn.InputEnded:Connect(function(input)
+    card.InputEnded:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.Touch then
             press(false)
         end
     end)
+    card.Activated:Connect(function()
+        openJoinModal(server, recommended, serverIndex)
+    end)
 end
 
-local function buildCurrentInfo()
-    if not currentBar then return end
-    local players = Players:GetPlayers()
-    local lp = Players.LocalPlayer
-    local pingMs = 0
-    pcall(function()
-        pingMs = math.floor(lp:GetNetworkPing() * 1000)
-    end)
-    currentBar.Text = "本服: " .. #players .. " / " .. Players.MaxPlayers
-        .. "   ·   Ping " .. pingMs .. "ms"
-        .. "   ·   房间ID: " .. (game.JobId or "无")
-        .. "   ·   " .. game.Name
+local function updateStatusLine1()
+    if not statusLabel then return end
+    local line2 = ""
+    local nl = statusLabel.Text:find("\n")
+    if nl then
+        line2 = statusLabel.Text:sub(nl + 1)
+    end
+    statusLabel.Text = currentLine() .. "\n" .. line2
 end
 
 local function buildList()
@@ -330,8 +375,10 @@ local function buildList()
         gridLayout.CellSize = UDim2.fromOffset(cell, cell)
         gridLayout.CellPadding = UDim2.fromOffset(gap, gap)
     end
-    buildCurrentInfo()
+    updateSortButtons()
 
+    serverIndex = 0
+    sortServers(browserServers)
     local query = searchBox.Text:lower()
     local shown = 0
     local recommended = nil
@@ -349,14 +396,15 @@ local function buildList()
         end
     end
 
+    local line1 = currentLine()
     if #browserServers == 0 then
-        statusLabel.Text = "当前没有可用的公开服务器"
+        statusLabel.Text = line1 .. "\n当前没有可用的公开服务器"
     elseif shown == 0 then
-        statusLabel.Text = "没有匹配「" .. searchBox.Text .. "」的服务器"
+        statusLabel.Text = line1 .. "\n没有匹配「" .. searchBox.Text .. "」的服务器"
     else
         local suffix = ""
         if searchBox.Text ~= "" then suffix = "（筛选结果）" end
-        statusLabel.Text = "共 " .. #browserServers .. " 个可用服务器，显示前 " .. shown .. " 个" .. suffix
+        statusLabel.Text = line1 .. "\n共 " .. #browserServers .. " 个可用服务器，显示前 " .. shown .. " 个" .. suffix
             .. " · " .. os.date("%H:%M:%S") .. " · 3秒自动刷新"
     end
 end
@@ -370,17 +418,14 @@ local function listSignature(list)
 end
 
 local function uiRefresh()
-    if not refreshBtn then return end
     if refreshing then return end
     refreshing = true
-    refreshBtn.Text = "获取中..."
-    statusLabel.Text = "正在获取服务器列表（3秒自动刷新）..."
+    statusLabel.Text = currentLine() .. "\n正在获取服务器列表（3秒自动刷新）..."
     task.spawn(function()
         local ok, list = pcall(fetchAllServers)
         refreshing = false
-        refreshBtn.Text = "刷新"
         if not ok then
-            statusLabel.Text = "获取失败: " .. tostring(list)
+            statusLabel.Text = currentLine() .. "\n获取失败: " .. tostring(list)
             return
         end
         browserServers = list
@@ -390,9 +435,8 @@ local function uiRefresh()
             lastSig = sig
             buildList()
         else
-            buildCurrentInfo()
+            updateStatusLine1()
         end
-        statusLabel.Text = "共 " .. #list .. " 个可用服务器 · " .. os.date("%H:%M:%S") .. " · 3秒自动刷新"
     end)
 end
 
@@ -403,14 +447,15 @@ local function closeModal()
     end
 end
 
-local function openJoinModal(server, recommended)
+local function openJoinModal(server, recommended, index)
     if not modalRoot then return end
     pendingJoin = server
     local pingText = type(server.ping) == "number" and (math.floor(server.ping) .. "ms") or "未知"
     local regionText = server.region and tostring(server.region) or "未知"
     local ratio = server.maxPlayers > 0 and (server.playing / server.maxPlayers) or 0
     local recText = recommended and "\n<font color='#6c5ce7'>★ 推荐服务器</font>" or ""
-    modalDetail.Text = "<font color='#50b4ff'>服务器ID: " .. tostring(server.id) .. "</font>"
+    modalDetail.Text = "<font color='#50b4ff'>服务器: " .. (index and ("服务器" .. index) or "?") .. "</font>"
+        .. "\n<font color='#9aa0b5'>ID: " .. tostring(server.id) .. "</font>"
         .. "\n<font color='#55ff88'>人数: " .. server.playing .. " / " .. server.maxPlayers
         .. "（" .. math.floor(ratio * 100) .. "%）</font>"
         .. "\n<font color='#ffaa3c'>Ping: " .. pingText .. "</font>"
@@ -559,8 +604,8 @@ local function createServerUI()
     titleLabel.Parent = header
 
     searchBox = Instance.new("TextBox")
-    searchBox.Size = UDim2.new(0.3, -10, 0, 36)
-    searchBox.Position = UDim2.new(0.36, 0, 0.5, -18)
+    searchBox.Size = UDim2.new(1, -24, 0, 36)
+    searchBox.Position = UDim2.new(0, 12, 0, 96)
     searchBox.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
     searchBox.BorderSizePixel = 0
     searchBox.PlaceholderText = "搜索服务器ID...（回车）"
@@ -570,7 +615,7 @@ local function createServerUI()
     searchBox.Font = Enum.Font.Gotham
     searchBox.TextSize = 14
     searchBox.ClearTextOnFocus = false
-    searchBox.Parent = header
+    searchBox.Parent = root
     Instance.new("UICorner", searchBox).CornerRadius = UDim.new(0, 8)
     local searchStroke = Instance.new("UIStroke", searchBox)
     searchStroke.Color = Color3.fromRGB(40, 40, 50)
@@ -578,25 +623,6 @@ local function createServerUI()
     searchBox.FocusLost:Connect(function()
         buildList()
     end)
-
-    refreshBtn = Instance.new("TextButton")
-    refreshBtn.Size = UDim2.new(0, 60, 0, 32)
-    refreshBtn.Position = UDim2.new(1, -104, 0.5, -16)
-    refreshBtn.BackgroundColor3 = Color3.fromRGB(108, 92, 231)
-    refreshBtn.BorderSizePixel = 0
-    refreshBtn.Text = "刷新"
-    refreshBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    refreshBtn.TextSize = 13
-    refreshBtn.Font = Enum.Font.GothamBold
-    refreshBtn.Parent = header
-    Instance.new("UICorner", refreshBtn).CornerRadius = UDim.new(0, 8)
-    refreshBtn.MouseEnter:Connect(function()
-        TweenService:Create(refreshBtn, TweenInfo.new(0.15), { BackgroundColor3 = Color3.fromRGB(130, 110, 245) }):Play()
-    end)
-    refreshBtn.MouseLeave:Connect(function()
-        TweenService:Create(refreshBtn, TweenInfo.new(0.15), { BackgroundColor3 = Color3.fromRGB(108, 92, 231) }):Play()
-    end)
-    refreshBtn.Activated:Connect(uiRefresh)
 
     local closeBtn = Instance.new("TextButton")
     closeBtn.Size = UDim2.new(0, 32, 0, 32)
@@ -619,22 +645,35 @@ local function createServerUI()
         ServerUI.Root.Visible = false
     end)
 
-    -- 本服信息条
-    currentBar = Instance.new("TextLabel")
-    currentBar.Size = UDim2.new(1, -24, 0, 24)
-    currentBar.Position = UDim2.new(0, 12, 0, 60)
-    currentBar.BackgroundTransparency = 1
-    currentBar.Font = Enum.Font.Gotham
-    currentBar.TextSize = 13
-    currentBar.TextColor3 = Color3.fromRGB(150, 158, 175)
-    currentBar.TextXAlignment = Enum.TextXAlignment.Left
-    currentBar.Text = "本服信息加载中..."
-    currentBar.Parent = root
+    -- 排序按钮组
+    local gap = 8
+    local btnW = (winW - 24 - gap * 2) / 3
+    local function makeSortBtn(text, mode, x)
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(0, btnW, 0, 34)
+        btn.Position = UDim2.new(0, x, 0, 54)
+        btn.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
+        btn.BorderSizePixel = 0
+        btn.Text = text
+        btn.TextColor3 = Color3.fromRGB(220, 220, 230)
+        btn.TextSize = 13
+        btn.Font = Enum.Font.GothamBold
+        btn.Parent = root
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+        btn.Activated:Connect(function()
+            SortMode = mode
+            buildList()
+        end)
+        return btn
+    end
+    sortPingBtn = makeSortBtn("Ping最低", "ping最低", 12)
+    sortMostBtn = makeSortBtn("人数最多", "人数最多", 12 + btnW + gap)
+    sortLeastBtn = makeSortBtn("人数最少", "人数最少", 12 + (btnW + gap) * 2)
 
     -- 多列网格
     cardGrid = Instance.new("ScrollingFrame")
-    cardGrid.Size = UDim2.new(1, -24, 1, -120)
-    cardGrid.Position = UDim2.new(0, 12, 0, 90)
+    cardGrid.Size = UDim2.new(1, -24, 1, -196)
+    cardGrid.Position = UDim2.new(0, 12, 0, 134)
     cardGrid.BackgroundTransparency = 1
     cardGrid.BorderSizePixel = 0
     cardGrid.ScrollBarThickness = 4
@@ -648,8 +687,8 @@ local function createServerUI()
     gridLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 
     statusLabel = Instance.new("TextLabel")
-    statusLabel.Size = UDim2.new(1, -24, 0, 24)
-    statusLabel.Position = UDim2.new(0, 12, 1, -28)
+    statusLabel.Size = UDim2.new(1, -24, 0, 40)
+    statusLabel.Position = UDim2.new(0, 12, 1, -46)
     statusLabel.BackgroundTransparency = 1
     statusLabel.Font = Enum.Font.Gotham
     statusLabel.TextSize = 12
@@ -697,13 +736,13 @@ end
 
 Players.PlayerAdded:Connect(function()
     if ServerUI.Root and ServerUI.Root.Visible then
-        buildCurrentInfo()
+        updateStatusLine1()
     end
 end)
 
 Players.PlayerRemoving:Connect(function()
     if ServerUI.Root and ServerUI.Root.Visible then
-        buildCurrentInfo()
+        updateStatusLine1()
     end
 end)
 
