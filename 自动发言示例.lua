@@ -86,24 +86,34 @@ end
 -- ===== UI：玩家选择（自动刷新） =====
 local playerNameList = {}
 local listKey = ""
+local selectedName = nil
 local TargetDropdown = nil
 
-local function refreshList(force)
-    local newList = {}
+local function rebuildList()
+    playerNameList = {}
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= lp then
-            table.insert(newList, p.Name)
+            table.insert(playerNameList, p.Name)
         end
     end
-    local key = table.concat(newList, ",")
+end
+
+local function updateList(force)
+    rebuildList()
+    local key = table.concat(playerNameList, ",")
     if force or key ~= listKey then
         listKey = key
-        playerNameList = newList
         pcall(function()
-            TargetDropdown:SetValues(playerNameList)
+            if TargetDropdown.Refresh then
+                TargetDropdown:Refresh(playerNameList, selectedName)
+            else
+                TargetDropdown:SetValues(playerNameList)
+            end
         end)
     end
 end
+
+rebuildList()
 
 TargetDropdown = mainTab:Dropdown({
     Title = "选择玩家",
@@ -111,20 +121,21 @@ TargetDropdown = mainTab:Dropdown({
     Values = playerNameList,
     Value = playerNameList[1] or "无",
     Callback = function(v)
+        selectedName = v
         selectedTarget = Players:FindFirstChild(v)
     end
 })
 
-Players.PlayerAdded:Connect(function() refreshList(false) end)
-Players.PlayerRemoving:Connect(function() refreshList(false) end)
+Players.PlayerAdded:Connect(function() updateList(false) end)
+Players.PlayerRemoving:Connect(function() updateList(false) end)
 task.spawn(function()
     while true do
         task.wait(2)
-        refreshList(false)
+        updateList(false)
     end
 end)
 
-refreshList(true)
+updateList(true)
 
 -- ===== UI：发言设置 =====
 mainTab:Input({
