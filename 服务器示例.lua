@@ -390,7 +390,7 @@ local function buildList()
     for _, s in ipairs(browserServers) do
         local id = tostring(s.id):lower()
         if query == "" or id:find(query, 1, true) then
-            createServerCard(s, #browserServers > 1 and s == recommended)
+            pcall(createServerCard, s, #browserServers > 1 and s == recommended)
             shown = shown + 1
             if shown >= 300 then break end
         end
@@ -433,7 +433,7 @@ local function uiRefresh()
         local sig = listSignature(list)
         if sig ~= lastSig then
             lastSig = sig
-            buildList()
+            pcall(buildList)
         else
             updateStatusLine1()
         end
@@ -559,7 +559,7 @@ end
 local function createServerUI()
     if ServerUI.Root then
         ServerUI.Root.Visible = true
-        buildList()
+        pcall(buildList)
         return
     end
 
@@ -582,6 +582,8 @@ local function createServerUI()
     root.BackgroundTransparency = 0.18
     root.BorderSizePixel = 0
     root.Parent = ScreenGui
+    ServerUI.Root = root
+    ServerUI.ScreenGui = ScreenGui
 
     -- 顶部栏
     local header = Instance.new("Frame")
@@ -642,12 +644,15 @@ local function createServerUI()
         TweenService:Create(closeBtn, TweenInfo.new(0.15), { BackgroundColor3 = Color3.fromRGB(30, 30, 38) }):Play()
     end)
     closeBtn.Activated:Connect(function()
-        ServerUI.Root.Visible = false
+        if ServerUI.Root then
+            ServerUI.Root.Visible = false
+        end
     end)
 
     -- 排序按钮组
+    local uiViewport = (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize) or Vector2.new(1280, 720)
     local gap = 8
-    local btnW = (winW - 24 - gap * 2) / 3
+    local btnW = (uiViewport.X - 24 - gap * 2) / 3
     local function makeSortBtn(text, mode, x)
         local btn = Instance.new("TextButton")
         btn.Size = UDim2.new(0, btnW, 0, 34)
@@ -698,21 +703,8 @@ local function createServerUI()
     statusLabel.Text = "等待刷新"
     statusLabel.Parent = root
 
-    UIS.InputBegan:Connect(function(input, processed)
-        if processed then return end
-        if input.KeyCode == Enum.KeyCode.Escape then
-            if modalRoot and modalRoot.Visible then
-                closeModal()
-            elseif ServerUI.Root and ServerUI.Root.Visible then
-                ServerUI.Root.Visible = false
-            end
-        end
-    end)
-
-    ServerUI.Root = root
-    ServerUI.ScreenGui = ScreenGui
     createModal(ScreenGui)
-    buildList()
+    pcall(buildList)
 
     -- 3 秒自动刷新（窗口可见时）
     task.spawn(function()
@@ -726,11 +718,16 @@ local function createServerUI()
 end
 
 local function openServerBrowser()
-    createServerUI()
+    local ok, err = pcall(createServerUI)
+    if not ok then
+        warn("[服务器] 列表界面创建失败:", err)
+        notify("服务器列表", "创建失败: " .. tostring(err), "alert-triangle", 5)
+        return
+    end
     if os.clock() - lastBrowserFetch > 3 or #browserServers == 0 then
         uiRefresh()
     else
-        buildList()
+        pcall(buildList)
     end
 end
 
@@ -743,6 +740,18 @@ end)
 Players.PlayerRemoving:Connect(function()
     if ServerUI.Root and ServerUI.Root.Visible then
         updateStatusLine1()
+    end
+end)
+
+-- 全局 Esc：先关弹窗，再关列表（即使创建中途失败也能关）
+UIS.InputBegan:Connect(function(input, processed)
+    if processed then return end
+    if input.KeyCode == Enum.KeyCode.Escape then
+        if modalRoot and modalRoot.Visible then
+            closeModal()
+        elseif ServerUI.Root then
+            ServerUI.Root.Visible = false
+        end
     end
 end)
 
