@@ -184,44 +184,86 @@ RunService.Heartbeat:Connect(function(step)
     end
 end)
 
--- ============ 伪装倒地（布娃娃） ============
-local FakeDownSaved = {}
+-- ============ 伪装倒地（布娃娃，参考 BS 的 toggleRagdoll） ============
+local motorBackup = {}
 
 local function applyFakeDown(on)
     local char = lp.Character
     if not char then return end
     local hum = char:FindFirstChildOfClass("Humanoid")
     local root = char:FindFirstChild("HumanoidRootPart")
-    if not hum or not root then return end
+    if not hum or not root or hum.Health <= 0 then return end
 
     if on then
-        FakeDownSaved = {}
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") then
-                table.insert(FakeDownSaved, { Part = part, Anchored = part.Anchored, CFrame = part.CFrame })
-            end
-        end
-        for _, d in ipairs(FakeDownSaved) do
-            if d.Part ~= root then
-                d.Part.Anchored = false
-            end
-        end
-        root.Anchored = true
+        -- 清掉旧备份，进入物理状态
+        motorBackup = {}
         pcall(function()
             hum:ChangeState(Enum.HumanoidStateType.Physics)
+            hum.AutoRotate = false
+        end)
+
+        -- 把所有 Motor6D 换成球窝约束，四肢变成真正的布娃娃
+        for _, joint in ipairs(char:GetDescendants()) do
+            if joint:IsA("Motor6D") then
+                pcall(function()
+                    local socket = Instance.new("BallSocketConstraint")
+                    local a1 = Instance.new("Attachment")
+                    local a2 = Instance.new("Attachment")
+
+                    a1.CFrame = joint.C0
+                    a2.CFrame = joint.C1
+                    a1.Parent = joint.Part0
+                    a2.Parent = joint.Part1
+
+                    socket.Attachment0 = a1
+                    socket.Attachment1 = a2
+                    socket.Parent = joint.Parent
+                    socket.LimitsEnabled = true
+                    socket.TwistLimitsEnabled = true
+
+                    motorBackup[#motorBackup + 1] = {
+                        Part0 = joint.Part0,
+                        Part1 = joint.Part1,
+                        C0 = joint.C0,
+                        C1 = joint.C1,
+                        Parent = joint.Parent,
+                    }
+
+                    joint:Destroy()
+                end)
+            end
+        end
+
+        pcall(function()
+            root.Velocity = Vector3.new(0, 15, 0)
         end)
     else
-        for _, d in ipairs(FakeDownSaved) do
+        -- 还原 Motor6D
+        for _, data in ipairs(motorBackup) do
             pcall(function()
-                d.Part.Anchored = d.Anchored
-                d.Part.CFrame = d.CFrame
+                local motor = Instance.new("Motor6D")
+                motor.Part0 = data.Part0
+                motor.Part1 = data.Part1
+                motor.C0 = data.C0
+                motor.C1 = data.C1
+                motor.Parent = data.Parent
             end)
         end
-        FakeDownSaved = {}
-        root.Anchored = false
+        motorBackup = {}
+
         pcall(function()
-            hum:ChangeState(Enum.HumanoidStateType.Running)
+            hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+            hum.AutoRotate = true
         end)
+
+        -- 清理残留的约束和附件
+        for _, item in ipairs(char:GetDescendants()) do
+            if item:IsA("BallSocketConstraint") or item:IsA("Attachment") then
+                pcall(function()
+                    item:Destroy()
+                end)
+            end
+        end
     end
 end
 
