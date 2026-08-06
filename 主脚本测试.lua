@@ -182,7 +182,7 @@ local FwTab = funcSec:Tab({ Title = "范围类", Icon = "user", Locked = false }
 local SfTab = funcSec:Tab({ Title = "甩飞类", Icon = "user", Locked = false })
 local fyTab = funcSec:Tab({ Title = "翻译类", Icon = "languages", Locked = false })
 local toolTab = funcSec:Tab({ Title = "工具类", Icon = "wrench", Locked = false })
-local amTab = funcSec:Tab({ Title = "自瞄类", Icon = "star", Locked = false })
+local amTab = funcSec:Tab({ Title = "自瞄类", Icon = "sliders-horizontal", Locked = false })
 
 -- 视觉类
 local shijueSec = win:Section({ Title = "视觉类", Icon = "palette", Locked = false })
@@ -342,10 +342,9 @@ task.spawn(updateCount)
 mainTab:Select()
 
 -- 玩家
-getgenv().SutureMoveCfg = getgenv().SutureMoveCfg or {
-    WalkSpeed = 16,
-    JumpPower = 50,
-}
+getgenv().SutureMoveCfg = getgenv().SutureMoveCfg or {}
+if getgenv().SutureMoveCfg.WalkSpeed == nil then getgenv().SutureMoveCfg.WalkSpeed = 16 end
+if getgenv().SutureMoveCfg.JumpPower == nil then getgenv().SutureMoveCfg.JumpPower = 50 end
 
 local MoveCfg = getgenv().SutureMoveCfg
 
@@ -434,18 +433,17 @@ moveSec:Button({
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
 
-getgenv().SuturePlayerExtra = getgenv().SuturePlayerExtra or {
-    InfJump = false,
-    WallClimb = false,
-    Noclip = false,
-    Spin = false,
-    SpinSpeed = 180,
-    Gravity = 10,
-    GravityLock = false,
-    AirJumps = 0,
-    FakeDown = false,
-    NoFallDamage = false,
+local defaultPlayerExtra = {
+    InfJump = false, WallClimb = false, Noclip = false,
+    Spin = false, SpinSpeed = 180, Gravity = 10, GravityLock = false,
+    AirJumps = 0, FakeDown = false, NoFallDamage = false,
 }
+getgenv().SuturePlayerExtra = getgenv().SuturePlayerExtra or {}
+for k, v in pairs(defaultPlayerExtra) do
+    if getgenv().SuturePlayerExtra[k] == nil then
+        getgenv().SuturePlayerExtra[k] = v
+    end
+end
 
 local PlayerExtra = getgenv().SuturePlayerExtra
 
@@ -657,7 +655,7 @@ enhanceSec:Toggle({
     Title = "无限跳跃",
     Desc = "在空中可以连续跳跃，键盘和手机跳跃键都有效",
     Type = "Checkbox",
-    Value = PlayerExtra.InfJump,
+    Value = PlayerExtra.InfJump or false,
     Callback = function(s)
         PlayerExtra.InfJump = s
     end
@@ -667,7 +665,7 @@ enhanceSec:Toggle({
     Title = "爬墙",
     Desc = "按住 W 顶住墙壁时会自动向上爬",
     Type = "Checkbox",
-    Value = PlayerExtra.WallClimb,
+    Value = PlayerExtra.WallClimb or false,
     Callback = function(s)
         PlayerExtra.WallClimb = s
     end
@@ -677,7 +675,7 @@ enhanceSec:Toggle({
     Title = "穿墙（Noclip）",
     Desc = "移动时无视碰撞，停止移动恢复碰撞，关闭后全部恢复",
     Type = "Checkbox",
-    Value = PlayerExtra.Noclip,
+    Value = PlayerExtra.Noclip or false,
     Callback = function(s)
         PlayerExtra.Noclip = s
         if not s then
@@ -690,7 +688,7 @@ enhanceSec:Slider({
     Title = "空中跳跃次数",
     Desc = "0 = 关闭；空中可额外跳跃的次数（无限跳跃开启时优先，不受此限制）",
     Step = 1,
-    Value = { Min = 0, Max = 20, Default = PlayerExtra.AirJumps },
+    Value = { Min = 0, Max = 20, Default = PlayerExtra.AirJumps or 0 },
     Callback = function(v)
         PlayerExtra.AirJumps = tonumber(v) or 0
         airJumpsUsed = 0
@@ -701,7 +699,7 @@ physSec:Slider({
     Title = "修改重力",
     Desc = "0 = 无重力，10 = 正常重力(196.2)，中间按比例，移动滑块后持续锁定",
     Step = 1,
-    Value = { Min = 0, Max = 10, Default = PlayerExtra.Gravity },
+    Value = { Min = 0, Max = 10, Default = PlayerExtra.Gravity or 10 },
     Callback = function(v)
         PlayerExtra.Gravity = tonumber(v) or 10
         PlayerExtra.GravityLock = true
@@ -723,7 +721,7 @@ physSec:Slider({
     Title = "旋转速度",
     Desc = "数值越高转得越快",
     Step = 1,
-    Value = { Min = 0, Max = 720, Default = PlayerExtra.SpinSpeed },
+    Value = { Min = 0, Max = 720, Default = PlayerExtra.SpinSpeed or 180 },
     Callback = function(v)
         PlayerExtra.SpinSpeed = tonumber(v) or 180
     end
@@ -733,7 +731,7 @@ physSec:Toggle({
     Title = "人物旋转",
     Desc = "开启后角色持续旋转",
     Type = "Checkbox",
-    Value = PlayerExtra.Spin,
+    Value = PlayerExtra.Spin or false,
     Callback = function(s)
         PlayerExtra.Spin = s
         local h = getHum()
@@ -747,7 +745,7 @@ otherSec:Toggle({
     Title = "伪装倒地",
     Desc = "布娃娃状态，四肢瘫倒，关闭后还原",
     Type = "Checkbox",
-    Value = PlayerExtra.FakeDown,
+    Value = PlayerExtra.FakeDown or false,
     Callback = function(s)
         PlayerExtra.FakeDown = s
         applyFakeDown(s)
@@ -758,7 +756,7 @@ otherSec:Toggle({
     Title = "无伤坠落",
     Desc = "隐形保护罩，免疫坠落伤害（同时也会免疫其他伤害）",
     Type = "Checkbox",
-    Value = PlayerExtra.NoFallDamage,
+    Value = PlayerExtra.NoFallDamage or false,
     Callback = function(s)
         PlayerExtra.NoFallDamage = s
         applyNoFallDamage(s)
@@ -815,18 +813,17 @@ fovTab:Slider({
 })
 
 -- ============ 自瞄（通用相机自瞄） ============
-getgenv().SutureAimbot = getgenv().SutureAimbot or {
-    Enabled = false,
-    ShowFov = true,
-    Fov = 200,
-    MaxDistance = 1000,
-    Part = "Head",
-    TeamCheck = false,
-    WallCheck = false,
-    Smooth = 0.8,
-    Prediction = 0.1,
-    Trigger = "按住右键",
+local defaultAimbot = {
+    Enabled = false, ShowFov = true, Fov = 200, MaxDistance = 1000,
+    Part = "Head", TeamCheck = false, WallCheck = false,
+    Smooth = 0.8, Prediction = 0.1, Trigger = "按住右键",
 }
+getgenv().SutureAimbot = getgenv().SutureAimbot or {}
+for k, v in pairs(defaultAimbot) do
+    if getgenv().SutureAimbot[k] == nil then
+        getgenv().SutureAimbot[k] = v
+    end
+end
 
 local Aimbot = getgenv().SutureAimbot
 local aimbotCircle = nil
