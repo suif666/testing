@@ -1,5 +1,5 @@
 -- 自动发言 + 私聊 独立脚本（自带 WindUI）
--- 功能：自动发言（指定次数连发）、指定发言（私聊）
+-- 布局：选择玩家 → 发言内容 → 发言次数 → 发言间隔 → 启用私聊 → 开启发言
 local WindUI
 do
     local ok, res = pcall(function()
@@ -26,7 +26,7 @@ local win = WindUI:CreateWindow({
     Icon = "aperture",
     Author = "by suif",
     Folder = "SutureHub",
-    Size = UDim2.fromOffset(360, 440),
+    Size = UDim2.fromOffset(360, 540),
     Transparent = true,
     Theme = "Dark",
     SideBarWidth = 180,
@@ -41,12 +41,11 @@ mainTab:Select()
 -- ===== 状态 =====
 local sayMessage = ""
 local sayCount = 1
-local isSpeaking = false
+local sayInterval = 1          -- 秒
+local whisperOnly = false      -- 私聊模式
+local speakEnabled = false
 local speakThread = nil
-
-local whisperMessage = ""
-local whisperCount = 1
-local whisperTarget = nil
+local selectedTarget = nil
 
 -- ===== 发送函数（兼容新旧聊天系统） =====
 local function SendChatMessage(message)
@@ -69,21 +68,68 @@ local function SendChatMessage(message)
     end)
 end
 
--- 私聊：用聊天指令 /w 玩家名 内容
 local function SendWhisper(targetName, message)
     if not targetName or targetName == "" or not message or message == "" then return end
     SendChatMessage("/w " .. targetName .. " " .. message)
 end
 
--- ===== 自动发言 UI =====
-mainTab:Paragraph({
-    Title = "自动发言",
-    Desc = "按指定次数连续发送同一句话"
+local function SendCurrent()
+    if whisperOnly then
+        if selectedTarget then
+            SendWhisper(selectedTarget.Name, sayMessage)
+        end
+    else
+        SendChatMessage(sayMessage)
+    end
+end
+
+-- ===== UI：玩家选择（自动刷新） =====
+local playerNameList = {}
+local listKey = ""
+local TargetDropdown = nil
+
+local function refreshList(force)
+    local newList = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= lp then
+            table.insert(newList, p.Name)
+        end
+    end
+    local key = table.concat(newList, ",")
+    if force or key ~= listKey then
+        listKey = key
+        playerNameList = newList
+        pcall(function()
+            TargetDropdown:SetValues(playerNameList)
+        end)
+    end
+end
+
+TargetDropdown = mainTab:Dropdown({
+    Title = "选择玩家",
+    Desc = "私聊对象；公屏发言时可忽略",
+    Values = playerNameList,
+    Value = playerNameList[1] or "无",
+    Callback = function(v)
+        selectedTarget = Players:FindFirstChild(v)
+    end
 })
 
+Players.PlayerAdded:Connect(function() refreshList(false) end)
+Players.PlayerRemoving:Connect(function() refreshList(false) end)
+task.spawn(function()
+    while true do
+        task.wait(2)
+        refreshList(false)
+    end
+end)
+
+refreshList(true)
+
+-- ===== UI：发言设置 =====
 mainTab:Input({
     Title = "发言内容",
-    Desc = "要自动发送的话",
+    Desc = "要发送的话",
     Callback = function(v)
         sayMessage = v or ""
     end
@@ -91,32 +137,57 @@ mainTab:Input({
 
 mainTab:Input({
     Title = "发言次数",
-    Desc = "连续发送几次",
+    Desc = "一共发送几次",
     Callback = function(v)
         sayCount = tonumber(v) or 1
     end
 })
 
+mainTab:Slider({
+    Title = "发言间隔",
+    Desc = "每条消息间隔（秒）",
+    Step = 0.5,
+    Value = { Min = 0.5, Max = 10, Default = 1 },
+    Callback = function(v)
+        sayInterval = tonumber(v) or 1
+    end
+})
+
+mainTab:Dropdown({
+    Title = "发言方式",
+    Desc = "公屏 = 发给所有人；私聊 = 只发给选中的玩家",
+    Values = { "公屏", "私聊" },
+    Value = "公屏",
+    Callback = function(v)
+        whisperOnly = (v == "私聊")
+    end
+})
+
 mainTab:Toggle({
-    Title = "发言开关",
-    Desc = "开启后按上面的内容和次数发送",
+    Title = "开启发言",
+    Desc = "按上面的设置开始/停止发言",
     Type = "Checkbox",
     Value = false,
     Callback = function(s)
-        isSpeaking = s
+        speakEnabled = s
         if s then
             if sayMessage == "" then
                 warn("[自动发言] 请先输入发言内容")
-                isSpeaking = false
+                speakEnabled = false
+                return
+            end
+            if whisperOnly and not selectedTarget then
+                warn("[自动发言] 私聊模式请先选择玩家")
+                speakEnabled = false
                 return
             end
             speakThread = task.spawn(function()
                 for i = 1, math.max(1, sayCount) do
-                    if not isSpeaking then break end
-                    SendChatMessage(sayMessage)
-                    task.wait(0.5)
+                    if not speakEnabled then break end
+                    SendCurrent()
+                    task.wait(math.clamp(sayInterval, 0.5, 10))
                 end
-                isSpeaking = false
+                speakEnabled = false
             end)
         else
             if speakThread then
@@ -124,103 +195,6 @@ mainTab:Toggle({
                 speakThread = nil
             end
         end
-    end
-})
-
-mainTab:Space()
-
--- ===== 私聊 UI =====
-mainTab:Paragraph({
-    Title = "指定发言（私聊）",
-    Desc = "选择玩家后发送私聊消息"
-})
-
-local playerNameList = {}
-local function rebuildList()
-    playerNameList = {}
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= lp then
-            table.insert(playerNameList, p.Name)
-        end
-    end
-end
-rebuildList()
-
-local TargetDropdown = mainTab:Dropdown({
-    Title = "选择私聊对象",
-    Values = playerNameList,
-    Value = playerNameList[1] or "无",
-    Callback = function(v)
-        whisperTarget = Players:FindFirstChild(v)
-    end
-})
-
-mainTab:Button({
-    Title = "刷新玩家列表",
-    Callback = function()
-        rebuildList()
-        pcall(function()
-            TargetDropdown:SetValues(playerNameList)
-        end)
-    end
-})
-
-Players.PlayerAdded:Connect(function()
-    rebuildList()
-    pcall(function()
-        TargetDropdown:SetValues(playerNameList)
-    end)
-end)
-
-Players.PlayerRemoving:Connect(function()
-    rebuildList()
-    pcall(function()
-        TargetDropdown:SetValues(playerNameList)
-    end)
-end)
-
-mainTab:Input({
-    Title = "私聊内容",
-    Desc = "发给选中玩家的消息",
-    Callback = function(v)
-        whisperMessage = v or ""
-    end
-})
-
-mainTab:Input({
-    Title = "私聊次数",
-    Desc = "连发几次",
-    Callback = function(v)
-        whisperCount = tonumber(v) or 1
-    end
-})
-
-mainTab:Button({
-    Title = "发送私聊",
-    Desc = "对选中的玩家发送私聊；若对方没收到，可尝试用显示名或 /w @名字 格式",
-    Callback = function()
-        if not whisperTarget then
-            warn("[自动发言] 请先选择私聊对象")
-            return
-        end
-        if whisperMessage == "" then
-            warn("[自动发言] 请先输入私聊内容")
-            return
-        end
-        task.spawn(function()
-            for i = 1, math.max(1, whisperCount) do
-                SendWhisper(whisperTarget.Name, whisperMessage)
-                task.wait(0.3)
-            end
-        end)
-        pcall(function()
-            WindUI:Notify({
-                Title = "私聊已发送",
-                Content = "发给 " .. whisperTarget.Name .. "：" .. whisperMessage,
-                Icon = "check",
-                Duration = 3
-            })
-        end)
     end
 })
 
