@@ -197,7 +197,7 @@ mainTab:Input({
 
 mainTab:Button({
     Title = "发送私聊",
-    Desc = "对选中的玩家发送私聊",
+    Desc = "对选中的玩家发送私聊；若对方没收到，可尝试用显示名或 /w @名字 格式",
     Callback = function()
         if not whisperTarget then
             warn("[自动发言] 请先选择私聊对象")
@@ -212,6 +212,14 @@ mainTab:Button({
                 SendWhisper(whisperTarget.Name, whisperMessage)
                 task.wait(0.3)
             end
+        end)
+        pcall(function()
+            WindUI:Notify({
+                Title = "私聊已发送",
+                Content = "发给 " .. whisperTarget.Name .. "：" .. whisperMessage,
+                Icon = "check",
+                Duration = 3
+            })
         end)
     end
 })
