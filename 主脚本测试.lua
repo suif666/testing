@@ -182,11 +182,13 @@ local FwTab = funcSec:Tab({ Title = "范围类", Icon = "user", Locked = false }
 local SfTab = funcSec:Tab({ Title = "甩飞类", Icon = "user", Locked = false })
 local fyTab = funcSec:Tab({ Title = "翻译类", Icon = "languages", Locked = false })
 local toolTab = funcSec:Tab({ Title = "工具类", Icon = "wrench", Locked = false })
+local amTab = funcSec:Tab({ Title = "自瞄类", Icon = "star", Locked = false })
 
 -- 视觉类
 local shijueSec = win:Section({ Title = "视觉类", Icon = "palette", Locked = false })
 local pingfpsTab = shijueSec:Tab({ Title = "ping/fps显示", Icon = "rss", Locked = false })
 local radarTab = shijueSec:Tab({ Title = "雷达", Icon = "radar", Locked = false })
+local fovTab = shijueSec:Tab({ Title = "视野", Icon = "palette", Locked = false })
 
 -- 脚本类
 local scriptSec = win:Section({ Title = "脚本类", Icon = "folder", Opened = false })
@@ -390,7 +392,13 @@ lp.CharacterAdded:Connect(function(char)
     end)
 end)
 
-playerTab:Slider({
+-- 玩家类 UI 分组
+local moveSec = playerTab:Section({ Title = "移动属性", Icon = "settings", Opened = true })
+local enhanceSec = playerTab:Section({ Title = "移动增强", Icon = "user", Opened = true })
+local physSec = playerTab:Section({ Title = "物理效果", Icon = "sliders-horizontal", Opened = true })
+local otherSec = playerTab:Section({ Title = "其他", Icon = "info", Opened = true })
+
+moveSec:Slider({
     Title = "移动速度",
     Desc = "修改并锁定 WalkSpeed，防止被游戏重置",
     Step = 1,
@@ -401,7 +409,7 @@ playerTab:Slider({
     end
 })
 
-playerTab:Slider({
+moveSec:Slider({
     Title = "跳跃高度",
     Desc = "修改并锁定 JumpPower，防止被游戏重置",
     Step = 1,
@@ -412,24 +420,13 @@ playerTab:Slider({
     end
 })
 
-playerTab:Button({
+moveSec:Button({
     Title = "恢复默认属性",
     Desc = "恢复默认速度和跳跃，并继续锁定默认值",
     Callback = function()
         MoveCfg.WalkSpeed = 16
         MoveCfg.JumpPower = 50
         applyMovement()
-    end
-})
-
-playerTab:Button({
-    Title = "重置角色",
-    Desc = "让自己的角色重生",
-    Callback = function()
-        local h = getHum()
-        if h then
-            h.Health = 0
-        end
     end
 })
 
@@ -443,20 +440,60 @@ getgenv().SuturePlayerExtra = getgenv().SuturePlayerExtra or {
     Noclip = false,
     Spin = false,
     SpinSpeed = 180,
-    Gravity = 196.2,
+    Gravity = 10,
     GravityLock = false,
+    AirJumps = 0,
+    FakeDown = false,
+    NoFallDamage = false,
 }
 
 local PlayerExtra = getgenv().SuturePlayerExtra
 
--- 无限跳跃：空中按空格继续跳
-UIS.InputBegan:Connect(function(input)
-    if not PlayerExtra.InfJump then return end
-    if input.KeyCode == Enum.KeyCode.Space then
-        local h = getHum()
-        if h and h.Health > 0 and h.SeatPart == nil then
-            h:ChangeState(Enum.HumanoidStateType.Jumping)
+-- 旧版本存的是 196.2 档，转成新的 0~10 档
+if (PlayerExtra.Gravity or 10) > 10 then
+    PlayerExtra.Gravity = 10
+end
+
+-- 无限跳跃：用 JumpRequest 监听（键盘/手机跳跃键都能触发），空中跳直接改垂直速度
+local function isGrounded()
+    local h = getHum()
+    return h ~= nil and h.FloorMaterial ~= Enum.Material.Air
+end
+
+local airJumpsUsed = 0
+local wasGrounded = true
+
+UIS.JumpRequest:Connect(function()
+    local h = getHum()
+    local c = lp.Character
+    local root = c and c:FindFirstChild("HumanoidRootPart")
+    if not h or not root or h.Health <= 0 or h.SeatPart then return end
+
+    local grounded = isGrounded()
+
+    -- 落地时重置空中跳跃计数
+    if grounded and not wasGrounded then
+        airJumpsUsed = 0
+    end
+    wasGrounded = grounded
+
+    if grounded then
+        h:ChangeState(Enum.HumanoidStateType.Jumping)
+        airJumpsUsed = 0
+        return
+    end
+
+    -- 空中：无限跳跃优先，其次按“空中跳跃次数”限制
+    local allow = PlayerExtra.InfJump
+        or (PlayerExtra.AirJumps > 0 and airJumpsUsed < PlayerExtra.AirJumps)
+    if allow then
+        if not PlayerExtra.InfJump then
+            airJumpsUsed = airJumpsUsed + 1
         end
+        pcall(function()
+            local v = root.Velocity
+            root.Velocity = Vector3.new(v.X, h.JumpPower, v.Z)
+        end)
     end
 end)
 
@@ -515,7 +552,7 @@ end)
 
 -- 修改重力：持续锁定
 local function applyGravity()
-    workspace.Gravity = PlayerExtra.Gravity
+    workspace.Gravity = PlayerExtra.Gravity * 19.62
 end
 
 task.spawn(function()
@@ -538,11 +575,87 @@ RunService.Heartbeat:Connect(function(step)
     end
 end)
 
-playerTab:Space()
+-- 伪装倒地（布娃娃）：取消四肢物理瘫倒，恢复时还原位置
+local FakeDownSaved = {}
 
-playerTab:Toggle({
+local function applyFakeDown(on)
+    local char = lp.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not hum or not root then return end
+
+    if on then
+        FakeDownSaved = {}
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") then
+                table.insert(FakeDownSaved, { Part = part, Anchored = part.Anchored, CFrame = part.CFrame })
+            end
+        end
+        for _, d in ipairs(FakeDownSaved) do
+            if d.Part ~= root then
+                d.Part.Anchored = false
+            end
+        end
+        root.Anchored = true
+        pcall(function()
+            hum:ChangeState(Enum.HumanoidStateType.Physics)
+        end)
+    else
+        for _, d in ipairs(FakeDownSaved) do
+            pcall(function()
+                d.Part.Anchored = d.Anchored
+                d.Part.CFrame = d.CFrame
+            end)
+        end
+        FakeDownSaved = {}
+        root.Anchored = false
+        pcall(function()
+            hum:ChangeState(Enum.HumanoidStateType.Running)
+        end)
+    end
+end
+
+-- 无伤坠落：隐形保护罩，免疫坠落伤害
+local function applyNoFallDamage(on)
+    local char = lp.Character
+    if not char then return end
+    if on then
+        if not char:FindFirstChildOfClass("ForceField") then
+            local ff = Instance.new("ForceField")
+            ff.Visible = false
+            ff.Parent = char
+        end
+    else
+        for _, ff in ipairs(char:GetDescendants()) do
+            if ff:IsA("ForceField") and not ff.Visible then
+                pcall(function()
+                    ff:Destroy()
+                end)
+            end
+        end
+    end
+end
+
+-- 角色重生后自动补上开启中的伪装倒地 / 无伤坠落
+lp.CharacterAdded:Connect(function(char)
+    task.spawn(function()
+        local hum = char:WaitForChild("Humanoid", 8)
+        if hum then
+            task.wait(0.2)
+            if PlayerExtra.FakeDown then
+                applyFakeDown(true)
+            end
+            if PlayerExtra.NoFallDamage then
+                applyNoFallDamage(true)
+            end
+        end
+    end)
+end)
+
+enhanceSec:Toggle({
     Title = "无限跳跃",
-    Desc = "在空中可以连续按空格跳跃",
+    Desc = "在空中可以连续跳跃，键盘和手机跳跃键都有效",
     Type = "Checkbox",
     Value = PlayerExtra.InfJump,
     Callback = function(s)
@@ -550,7 +663,7 @@ playerTab:Toggle({
     end
 })
 
-playerTab:Toggle({
+enhanceSec:Toggle({
     Title = "爬墙",
     Desc = "按住 W 顶住墙壁时会自动向上爬",
     Type = "Checkbox",
@@ -560,7 +673,7 @@ playerTab:Toggle({
     end
 })
 
-playerTab:Toggle({
+enhanceSec:Toggle({
     Title = "穿墙（Noclip）",
     Desc = "移动时无视碰撞，停止移动恢复碰撞，关闭后全部恢复",
     Type = "Checkbox",
@@ -573,39 +686,50 @@ playerTab:Toggle({
     end
 })
 
-playerTab:Slider({
-    Title = "修改重力",
-    Desc = "负数向上飘，196.2 为默认值，移动滑块后持续锁定",
+enhanceSec:Slider({
+    Title = "空中跳跃次数",
+    Desc = "0 = 关闭；空中可额外跳跃的次数（无限跳跃开启时优先，不受此限制）",
     Step = 1,
-    Value = { Min = -500, Max = 500, Default = PlayerExtra.Gravity },
+    Value = { Min = 0, Max = 20, Default = PlayerExtra.AirJumps },
     Callback = function(v)
-        PlayerExtra.Gravity = tonumber(v) or 196.2
+        PlayerExtra.AirJumps = tonumber(v) or 0
+        airJumpsUsed = 0
+    end
+})
+
+physSec:Slider({
+    Title = "修改重力",
+    Desc = "0 = 无重力，10 = 正常重力(196.2)，中间按比例，移动滑块后持续锁定",
+    Step = 1,
+    Value = { Min = 0, Max = 10, Default = PlayerExtra.Gravity },
+    Callback = function(v)
+        PlayerExtra.Gravity = tonumber(v) or 10
         PlayerExtra.GravityLock = true
         pcall(applyGravity)
     end
 })
 
-playerTab:Button({
+physSec:Button({
     Title = "恢复默认重力",
-    Desc = "停止锁定并恢复 196.2",
+    Desc = "停止锁定并恢复正常重力",
     Callback = function()
         PlayerExtra.GravityLock = false
-        PlayerExtra.Gravity = 196.2
+        PlayerExtra.Gravity = 10
         workspace.Gravity = 196.2
     end
 })
 
-playerTab:Slider({
+physSec:Slider({
     Title = "旋转速度",
-    Desc = "人物旋转速度，负数为反向旋转",
+    Desc = "数值越高转得越快",
     Step = 1,
-    Value = { Min = -720, Max = 720, Default = PlayerExtra.SpinSpeed },
+    Value = { Min = 0, Max = 720, Default = PlayerExtra.SpinSpeed },
     Callback = function(v)
         PlayerExtra.SpinSpeed = tonumber(v) or 180
     end
 })
 
-playerTab:Toggle({
+physSec:Toggle({
     Title = "人物旋转",
     Desc = "开启后角色持续旋转",
     Type = "Checkbox",
@@ -615,6 +739,39 @@ playerTab:Toggle({
         local h = getHum()
         if h then
             h.AutoRotate = not s
+        end
+    end
+})
+
+otherSec:Toggle({
+    Title = "伪装倒地",
+    Desc = "布娃娃状态，四肢瘫倒，关闭后还原",
+    Type = "Checkbox",
+    Value = PlayerExtra.FakeDown,
+    Callback = function(s)
+        PlayerExtra.FakeDown = s
+        applyFakeDown(s)
+    end
+})
+
+otherSec:Toggle({
+    Title = "无伤坠落",
+    Desc = "隐形保护罩，免疫坠落伤害（同时也会免疫其他伤害）",
+    Type = "Checkbox",
+    Value = PlayerExtra.NoFallDamage,
+    Callback = function(s)
+        PlayerExtra.NoFallDamage = s
+        applyNoFallDamage(s)
+    end
+})
+
+otherSec:Button({
+    Title = "重置角色",
+    Desc = "让自己的角色重生",
+    Callback = function()
+        local h = getHum()
+        if h then
+            h.Health = 0
         end
     end
 })
@@ -634,6 +791,253 @@ fyTab:Button({
 })
 
 -- 视觉
+
+-- ============ 视野（FOV） ============
+local fovConn = nil
+fovTab:Slider({
+    Title = "视野角度",
+    Desc = "70 = 默认，120 = 广角，会持续锁定防止被游戏重置",
+    Step = 1,
+    Value = { Min = 70, Max = 120, Default = workspace.CurrentCamera and workspace.CurrentCamera.FieldOfView or 70 },
+    Callback = function(v)
+        local fov = tonumber(v) or 70
+        if fovConn then
+            fovConn:Disconnect()
+            fovConn = nil
+        end
+        fovConn = RunService.RenderStepped:Connect(function()
+            local cam = workspace.CurrentCamera
+            if cam and cam.FieldOfView ~= fov then
+                cam.FieldOfView = fov
+            end
+        end)
+    end
+})
+
+-- ============ 自瞄（通用相机自瞄） ============
+getgenv().SutureAimbot = getgenv().SutureAimbot or {
+    Enabled = false,
+    ShowFov = true,
+    Fov = 200,
+    MaxDistance = 1000,
+    Part = "Head",
+    TeamCheck = false,
+    WallCheck = false,
+    Smooth = 0.8,
+    Prediction = 0.1,
+    Trigger = "按住右键",
+}
+
+local Aimbot = getgenv().SutureAimbot
+local aimbotCircle = nil
+
+local function getAimPart(character)
+    if not character then return nil end
+    if Aimbot.Part == "随机" then
+        local list = { "Head", "HumanoidRootPart", "UpperTorso", "Torso" }
+        return character:FindFirstChild(list[math.random(1, #list)])
+    end
+    return character:FindFirstChild(Aimbot.Part)
+end
+
+local function aimTriggerActive()
+    if Aimbot.Trigger == "一直瞄准" then return true end
+    if Aimbot.Trigger == "按住右键" then
+        local ok, v = pcall(function()
+            return UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+        end)
+        return ok and v
+    end
+    if Aimbot.Trigger == "按住F" then return UIS:IsKeyDown(Enum.KeyCode.F) end
+    return false
+end
+
+local function getAimTarget()
+    local cam = workspace.CurrentCamera
+    if not cam then return nil end
+    local center = cam.ViewportSize / 2
+    local best, bestDist = nil, Aimbot.Fov
+    local myChar = lp.Character
+
+    for _, p in ipairs(plrs:GetPlayers()) do
+        if p == lp then continue end
+        local char = p.Character
+        if not char then continue end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then continue end
+        if Aimbot.TeamCheck and p.Team and lp.Team and p.Team == lp.Team then continue end
+
+        local part = getAimPart(char)
+        if not part then continue end
+
+        local pos, onScreen = cam:WorldToViewportPoint(part.Position)
+        if not onScreen then continue end
+
+        local screenDist = (Vector2.new(pos.X, pos.Y) - center).Magnitude
+        if screenDist > Aimbot.Fov then continue end
+
+        if (cam.CFrame.Position - part.Position).Magnitude > Aimbot.MaxDistance then continue end
+
+        if Aimbot.WallCheck then
+            local params = RaycastParams.new()
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            params.FilterDescendantsInstances = { myChar, char }
+            local ray = workspace:Raycast(
+                cam.CFrame.Position,
+                (part.Position - cam.CFrame.Position).Unit * Aimbot.MaxDistance,
+                params
+            )
+            if ray and ray.Instance then continue end
+        end
+
+        if screenDist < bestDist then
+            bestDist = screenDist
+            best = { Character = char, Part = part }
+        end
+    end
+
+    return best
+end
+
+local function aimbotLoop()
+    local cam = workspace.CurrentCamera
+    if not cam then return end
+
+    -- FOV 圈
+    if Aimbot.Enabled and Aimbot.ShowFov then
+        pcall(function()
+            if not aimbotCircle and Drawing then
+                aimbotCircle = Drawing.new("Circle")
+                aimbotCircle.Color = Color3.fromRGB(255, 255, 255)
+                aimbotCircle.Thickness = 1.5
+                aimbotCircle.NumSides = 60
+                aimbotCircle.Filled = false
+                aimbotCircle.Transparency = 1
+            end
+            if aimbotCircle then
+                aimbotCircle.Visible = true
+                aimbotCircle.Radius = Aimbot.Fov
+                aimbotCircle.Position = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y / 2)
+            end
+        end)
+    elseif aimbotCircle then
+        aimbotCircle.Visible = false
+    end
+
+    if not Aimbot.Enabled or not aimTriggerActive() then return end
+
+    local target = getAimTarget()
+    if target and target.Part then
+        local targetPos = target.Part.Position
+        if Aimbot.Prediction > 0 then
+            targetPos = targetPos + target.Part.AssemblyLinearVelocity * Aimbot.Prediction
+        end
+        cam.CFrame = cam.CFrame:Lerp(CFrame.new(cam.CFrame.Position, targetPos), Aimbot.Smooth)
+    end
+end
+
+RunService.RenderStepped:Connect(aimbotLoop)
+
+aimTab:Toggle({
+    Title = "自瞄开关",
+    Desc = "总开关，配合下面的触发方式使用",
+    Type = "Checkbox",
+    Value = Aimbot.Enabled,
+    Callback = function(s)
+        Aimbot.Enabled = s
+    end
+})
+
+aimTab:Toggle({
+    Title = "显示FOV圈",
+    Desc = "屏幕中心显示瞄准范围圈",
+    Type = "Checkbox",
+    Value = Aimbot.ShowFov,
+    Callback = function(s)
+        Aimbot.ShowFov = s
+        if not s and aimbotCircle then
+            aimbotCircle.Visible = false
+        end
+    end
+})
+
+aimTab:Slider({
+    Title = "FOV范围",
+    Desc = "屏幕中心多大范围内会锁定目标",
+    Step = 10,
+    Value = { Min = 10, Max = 700, Default = Aimbot.Fov },
+    Callback = function(v)
+        Aimbot.Fov = tonumber(v) or 200
+    end
+})
+
+aimTab:Slider({
+    Title = "最大距离",
+    Desc = "超过该距离不锁定（米）",
+    Step = 50,
+    Value = { Min = 50, Max = 6000, Default = Aimbot.MaxDistance },
+    Callback = function(v)
+        Aimbot.MaxDistance = tonumber(v) or 1000
+    end
+})
+
+aimTab:Dropdown({
+    Title = "瞄准部位",
+    Values = { "Head", "HumanoidRootPart", "随机" },
+    Value = Aimbot.Part,
+    Callback = function(v)
+        Aimbot.Part = v
+    end
+})
+
+aimTab:Dropdown({
+    Title = "触发方式",
+    Values = { "一直瞄准", "按住右键", "按住F" },
+    Value = Aimbot.Trigger,
+    Callback = function(v)
+        Aimbot.Trigger = v
+    end
+})
+
+aimTab:Toggle({
+    Title = "队伍检测",
+    Desc = "开启后跳过同队玩家",
+    Type = "Checkbox",
+    Value = Aimbot.TeamCheck,
+    Callback = function(s)
+        Aimbot.TeamCheck = s
+    end
+})
+
+aimTab:Toggle({
+    Title = "穿墙自瞄",
+    Desc = "开启后有墙挡住就不会锁定",
+    Type = "Checkbox",
+    Value = Aimbot.WallCheck,
+    Callback = function(s)
+        Aimbot.WallCheck = s
+    end
+})
+
+aimTab:Slider({
+    Title = "平滑度",
+    Desc = "越低越平滑，1 = 瞬间转向",
+    Step = 0.05,
+    Value = { Min = 0.1, Max = 1, Default = Aimbot.Smooth },
+    Callback = function(v)
+        Aimbot.Smooth = tonumber(v) or 0.8
+    end
+})
+
+aimTab:Slider({
+    Title = "预判(秒)",
+    Desc = "0 = 关闭；预测移动目标的位置（参考 Xa 的预判）",
+    Step = 0.05,
+    Value = { Min = 0, Max = 1, Default = Aimbot.Prediction },
+    Callback = function(v)
+        Aimbot.Prediction = tonumber(v) or 0.1
+    end
+})
 
 -- 即时互动（极简版，几乎不掉帧）
 getgenv().SutureHubPromptHoldCache = getgenv().SutureHubPromptHoldCache or setmetatable({}, { __mode = "k" })
