@@ -43,6 +43,7 @@ local sayMessage = ""
 local sayCount = 1
 local sayInterval = 1          -- 秒
 local whisperOnly = false      -- 私聊模式
+local whisperFormat = "用户名"  -- 用户名 / @用户名 / 显示名
 local speakEnabled = false
 local speakThread = nil
 local selectedTarget = nil
@@ -76,15 +77,27 @@ local function SendChatMessage(message)
     end)
 end
 
-local function SendWhisper(targetName, message)
-    if not targetName or targetName == "" or not message or message == "" then return end
-    SendChatMessage("/w " .. targetName .. " " .. message)
+local function SendWhisper(target, message)
+    if not target or not message or message == "" then return end
+    local name
+    if whisperFormat == "显示名" then
+        name = target.DisplayName
+    elseif whisperFormat == "@用户名" then
+        name = "@" .. target.Name
+    else
+        name = target.Name
+    end
+    local cmd = "/w " .. name .. " " .. message
+    print("[私聊] 发送指令:", cmd)
+    SendChatMessage(cmd)
 end
 
 local function SendCurrent()
     if whisperOnly then
         if selectedTarget then
-            SendWhisper(selectedTarget.Name, sayMessage)
+            SendWhisper(selectedTarget, sayMessage)
+        else
+            warn("[自动发言] 找不到所选玩家，请重新选择")
         end
     else
         SendChatMessage(sayMessage)
@@ -181,6 +194,17 @@ mainTab:Dropdown({
     Callback = function(v)
         v = unwrap(v)
         whisperOnly = (v == "私聊")
+    end
+})
+
+mainTab:Dropdown({
+    Title = "私聊格式",
+    Desc = "对方收不到时切换：用户名 / @用户名 / 显示名",
+    Values = { "用户名", "@用户名", "显示名" },
+    Value = "用户名",
+    Callback = function(v)
+        v = unwrap(v)
+        whisperFormat = v
     end
 })
 
