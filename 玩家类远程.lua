@@ -313,7 +313,7 @@ local uiOk, uiErr = pcall(function()
 
     moveSec:Slider({
         Title = "移动速度",
-        Desc = "修改并锁定 WalkSpeed，防止被游戏重置",
+        Desc = "修改并锁定 WalkSpeed",
         Step = 1,
         Value = { Min = 16, Max = 100, Default = MoveCfg.WalkSpeed or 16 },
         Callback = function(v)
@@ -324,7 +324,7 @@ local uiOk, uiErr = pcall(function()
 
     moveSec:Slider({
         Title = "跳跃高度",
-        Desc = "修改并锁定 JumpPower，防止被游戏重置",
+        Desc = "修改并锁定 JumpPower",
         Step = 1,
         Value = { Min = 50, Max = 200, Default = MoveCfg.JumpPower or 50 },
         Callback = function(v)
@@ -335,7 +335,7 @@ local uiOk, uiErr = pcall(function()
 
     moveSec:Button({
         Title = "恢复默认属性",
-        Desc = "恢复默认速度和跳跃，并继续锁定默认值",
+        Desc = "恢复默认速度和跳跃 其实拉到最低就是默认了",
         Callback = function()
             MoveCfg.WalkSpeed = 16
             MoveCfg.JumpPower = 50
@@ -345,7 +345,7 @@ local uiOk, uiErr = pcall(function()
 
     enhanceSec:Toggle({
         Title = "无限跳跃",
-        Desc = "在空中可以连续跳跃，键盘和手机跳跃键都有效",
+        Desc = "在空中可以继续跳跃",
         Type = "Checkbox",
         Value = PlayerExtra.InfJump or false,
         Callback = function(s)
@@ -355,7 +355,7 @@ local uiOk, uiErr = pcall(function()
 
     enhanceSec:Slider({
         Title = "空中跳跃次数",
-        Desc = "0 = 关闭；空中可额外跳跃的次数（无限跳跃开启时优先，不受此限制）",
+        Desc = "0=关闭 字面意思 可以在空中额外跳跃",
         Step = 1,
         Value = { Min = 0, Max = 20, Default = PlayerExtra.AirJumps or 0 },
         Callback = function(v)
@@ -365,8 +365,8 @@ local uiOk, uiErr = pcall(function()
     })
 
     enhanceSec:Toggle({
-        Title = "穿墙（Noclip）",
-        Desc = "移动时无视碰撞，停止移动恢复碰撞，关闭后全部恢复",
+        Title = "穿墙",
+        Desc = "无视墙壁 直接穿过",
         Type = "Checkbox",
         Value = PlayerExtra.Noclip or false,
         Callback = function(s)
@@ -379,7 +379,7 @@ local uiOk, uiErr = pcall(function()
 
     physSec:Slider({
         Title = "修改重力",
-        Desc = "0 = 无重力，10 = 正常重力(196.2)，中间按比例，移动滑块后持续锁定",
+        Desc = "0=无重力，10=正常重力",
         Step = 1,
         Value = { Min = 0, Max = 10, Default = PlayerExtra.Gravity or 10 },
         Callback = function(v)
@@ -411,7 +411,7 @@ local uiOk, uiErr = pcall(function()
 
     physSec:Toggle({
         Title = "人物旋转",
-        Desc = "开启后角色持续旋转",
+        Desc = "开启后角色持续旋转 不影响移动",
         Type = "Checkbox",
         Value = PlayerExtra.Spin or false,
         Callback = function(s)
@@ -425,7 +425,7 @@ local uiOk, uiErr = pcall(function()
 
     otherSec:Toggle({
         Title = "伪装倒地",
-        Desc = "布娃娃状态，四肢瘫倒，关闭后还原",
+        Desc = "启用开启布娃娃状态",
         Type = "Checkbox",
         Value = PlayerExtra.FakeDown or false,
         Callback = function(s)
@@ -436,7 +436,7 @@ local uiOk, uiErr = pcall(function()
 
     otherSec:Toggle({
         Title = "无伤坠落",
-        Desc = "隐形保护罩，免疫坠落伤害（同时也会免疫其他伤害）",
+        Desc = "免疫坠落伤害 有时会拦截其他伤害",
         Type = "Checkbox",
         Value = PlayerExtra.NoFallDamage or false,
         Callback = function(s)
