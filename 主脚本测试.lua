@@ -182,6 +182,7 @@ local FwTab = funcSec:Tab({ Title = "范围类", Icon = "user", Locked = false }
 local SfTab = funcSec:Tab({ Title = "甩飞类", Icon = "user", Locked = false })
 local fyTab = funcSec:Tab({ Title = "翻译类", Icon = "languages", Locked = false })
 local toolTab = funcSec:Tab({ Title = "工具类", Icon = "wrench", Locked = false })
+local amTab = funcSec:Tab({ Title = "自瞄类", Icon = "user", Locked = false })
 
 -- 视觉类
 local shijueSec = win:Section({ Title = "视觉类", Icon = "palette", Locked = false })
@@ -216,7 +217,6 @@ local bdh2Tab = scriptSec:Tab({ Title = "冰大亨2", Icon = "shell", Locked = f
 local zxdyTab = scriptSec:Tab({ Title = "重型钓鱼", Icon = "shell", Locked = false })
 
 local settingsTab = win:Tab({ Title = "设置", Icon = "sliders-horizontal", Locked = false })
-local amTab = win:Tab({ Title = "自瞄", Icon = "sliders-horizontal", Locked = false })
 
 
 
