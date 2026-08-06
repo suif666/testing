@@ -64,6 +64,14 @@ local ServerConfig = {
 
 local statusText
 local adminListText
+local browserServers = {}
+local UIS = game:GetService("UserInputService")
+local ServerUI = { Root = nil }
+local listFrame = nil
+local statusLabel = nil
+local searchBox = nil
+local refreshBtn = nil
+local lastBrowserFetch = 0
 
 local function notify(title, content, icon, duration)
     pcall(function()
@@ -142,6 +150,276 @@ local function doSwitch(mode)
         task.wait(0.5)
         TeleportService:TeleportToPlaceInstance(PlaceId, server.id)
     end)
+end
+
+-- ===== 服务器浏览器：拉取全部服务器 =====
+local function fetchAllServers()
+    local all = {}
+    local cursor = nil
+
+    for page = 1, 20 do
+        local url = "https://games.roblox.com/v1/games/"
+            .. PlaceId
+            .. "/servers/Public?limit=100&sortOrder=Desc"
+        if cursor then
+            url = url .. "&cursor=" .. cursor
+        end
+
+        local data = HttpService:JSONDecode(game:HttpGet(url))
+        for _, s in ipairs(data.data or {}) do
+            -- 过滤掉当前服务器和已满的服务器
+            if s.id and s.id ~= CurrentJob and s.playing < s.maxPlayers then
+                table.insert(all, s)
+            end
+        end
+
+        cursor = data.nextPageCursor
+        setStatus("正在获取服务器... 第 " .. page .. " 页（已获取 " .. #all .. " 个）")
+        if not cursor then break end
+        task.wait(0.4)
+    end
+
+    -- 按在线人数从多到少排序
+    table.sort(all, function(a, b)
+        return (a.playing or 0) > (b.playing or 0)
+    end)
+    return all
+end
+
+-- ===== 自定义服务器列表界面 =====
+local function rebuildServerList()
+    for _, child in ipairs(listFrame:GetChildren()) do
+        if child:IsA("TextButton") then
+            child:Destroy()
+        end
+    end
+
+    local query = searchBox.Text:lower()
+    local shown = 0
+    for _, s in ipairs(browserServers) do
+        local id = tostring(s.id):lower()
+        if query == "" or id:find(query, 1, true) then
+            local row = Instance.new("TextButton")
+            row.Name = "Server"
+            row.Size = UDim2.new(1, 0, 0, 34)
+            row.BackgroundColor3 = Color3.fromRGB(38, 38, 48)
+            row.BorderSizePixel = 0
+            row.Font = Enum.Font.Gotham
+            row.TextSize = 14
+            row.TextColor3 = Color3.fromRGB(230, 230, 235)
+            row.Text = s.playing .. "/" .. s.maxPlayers .. "   |   " .. tostring(s.id):sub(1, 8)
+            row.Parent = listFrame
+            Instance.new("UICorner", row).CornerRadius = UDim.new(0, 6)
+            row.MouseEnter:Connect(function()
+                row.BackgroundColor3 = Color3.fromRGB(54, 54, 74)
+            end)
+            row.MouseLeave:Connect(function()
+                row.BackgroundColor3 = Color3.fromRGB(38, 38, 48)
+            end)
+            row.Activated:Connect(function()
+                statusLabel.Text = "正在加入 " .. tostring(s.id) .. "（在线 " .. s.playing .. "/" .. s.maxPlayers .. "）..."
+                notify("正在加入", "在线 " .. s.playing .. "/" .. s.maxPlayers, "arrow-right", 3)
+                TeleportService:TeleportToPlaceInstance(PlaceId, s.id)
+            end)
+            shown = shown + 1
+            if shown >= 800 then break end
+        end
+    end
+
+    listFrame.CanvasSize = UDim2.new(0, 0, 0, shown * 40 + 4)
+
+    if #browserServers == 0 then
+        statusLabel.Text = "当前没有可用的公开服务器"
+    elseif shown == 0 then
+        statusLabel.Text = "没有匹配「" .. searchBox.Text .. "」的服务器"
+    else
+        local suffix = ""
+        if searchBox.Text ~= "" then suffix = "（筛选结果）" end
+        statusLabel.Text = "共 " .. #browserServers .. " 个可用服务器，显示前 " .. shown .. " 个" .. suffix .. " · " .. os.date("%H:%M:%S")
+    end
+end
+
+local function uiRefresh()
+    if not refreshBtn then return end
+    refreshBtn.Text = "获取中..."
+    statusLabel.Text = "正在获取服务器列表..."
+    task.spawn(function()
+        local ok, list = pcall(fetchAllServers)
+        refreshBtn.Text = "刷新"
+        if not ok then
+            statusLabel.Text = "获取失败: " .. tostring(list)
+            return
+        end
+        browserServers = list
+        lastBrowserFetch = os.clock()
+        rebuildServerList()
+        notify("服务器列表", "找到 " .. #list .. " 个可用服务器", "check", 3)
+    end)
+end
+
+local function createServerUI()
+    if ServerUI.Root then
+        ServerUI.Root.Visible = true
+        return
+    end
+
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "ServerBrowserUI"
+    ScreenGui.ResetOnSpawn = false
+    ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    local parented = pcall(function()
+        ScreenGui.Parent = game:GetService("CoreGui")
+    end)
+    if not parented then
+        ScreenGui.Parent = Players.LocalPlayer:WaitForChild("PlayerGui")
+    end
+
+    local root = Instance.new("Frame")
+    root.Name = "Main"
+    root.Size = UDim2.fromOffset(460, 600)
+    root.Position = UDim2.new(0.5, -230, 0.5, -300)
+    root.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+    root.BorderSizePixel = 0
+    root.Parent = ScreenGui
+    Instance.new("UICorner", root).CornerRadius = UDim.new(0, 10)
+    local stroke = Instance.new("UIStroke", root)
+    stroke.Color = Color3.fromRGB(80, 80, 100)
+    stroke.Thickness = 1
+
+    local titleBar = Instance.new("Frame")
+    titleBar.Name = "TitleBar"
+    titleBar.Size = UDim2.new(1, 0, 0, 38)
+    titleBar.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
+    titleBar.BorderSizePixel = 0
+    titleBar.Parent = root
+    Instance.new("UICorner", titleBar).CornerRadius = UDim.new(0, 10)
+
+    local titleLabel = Instance.new("TextLabel")
+    titleLabel.Size = UDim2.new(1, -120, 1, 0)
+    titleLabel.Position = UDim2.new(0, 12, 0, 0)
+    titleLabel.BackgroundTransparency = 1
+    titleLabel.Font = Enum.Font.GothamBold
+    titleLabel.TextSize = 16
+    titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    titleLabel.Text = "服务器列表"
+    titleLabel.Parent = titleBar
+
+    refreshBtn = Instance.new("TextButton")
+    refreshBtn.Size = UDim2.new(0, 64, 0, 26)
+    refreshBtn.Position = UDim2.new(1, -110, 0.5, -13)
+    refreshBtn.BackgroundColor3 = Color3.fromRGB(50, 90, 220)
+    refreshBtn.BorderSizePixel = 0
+    refreshBtn.Font = Enum.Font.Gotham
+    refreshBtn.TextSize = 14
+    refreshBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    refreshBtn.Text = "刷新"
+    refreshBtn.Parent = titleBar
+    Instance.new("UICorner", refreshBtn).CornerRadius = UDim.new(0, 6)
+    refreshBtn.Activated:Connect(uiRefresh)
+
+    local closeBtn = Instance.new("TextButton")
+    closeBtn.Size = UDim2.new(0, 34, 0, 26)
+    closeBtn.Position = UDim2.new(1, -44, 0.5, -13)
+    closeBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 72)
+    closeBtn.BorderSizePixel = 0
+    closeBtn.Font = Enum.Font.GothamBold
+    closeBtn.TextSize = 14
+    closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    closeBtn.Text = "✕"
+    closeBtn.Parent = titleBar
+    Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 6)
+    closeBtn.Activated:Connect(function()
+        ServerUI.Root.Visible = false
+    end)
+
+    -- 拖动窗口
+    local dragging = false
+    local dragOffset = Vector2.zero
+    titleBar.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragOffset = input.Position - root.AbsolutePosition
+        end
+    end)
+    UIS.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+    UIS.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch) then
+            local cam = workspace.CurrentCamera
+            local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
+            local newPos = input.Position - dragOffset
+            root.Position = UDim2.fromOffset(
+                math.clamp(newPos.X, -root.AbsoluteSize.X + 60, vp.X - 60),
+                math.clamp(newPos.Y, 0, vp.Y - 40)
+            )
+        end
+    end)
+
+    searchBox = Instance.new("TextBox")
+    searchBox.Size = UDim2.new(1, -24, 0, 32)
+    searchBox.Position = UDim2.new(0, 12, 0, 46)
+    searchBox.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+    searchBox.BorderSizePixel = 0
+    searchBox.PlaceholderText = "搜索服务器ID...（回车应用）"
+    searchBox.PlaceholderColor3 = Color3.fromRGB(130, 130, 145)
+    searchBox.Text = ""
+    searchBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+    searchBox.Font = Enum.Font.Gotham
+    searchBox.TextSize = 14
+    searchBox.ClearTextOnFocus = false
+    searchBox.Parent = root
+    Instance.new("UICorner", searchBox).CornerRadius = UDim.new(0, 6)
+    searchBox.FocusLost:Connect(function()
+        rebuildServerList()
+    end)
+
+    listFrame = Instance.new("ScrollingFrame")
+    listFrame.Size = UDim2.new(1, -24, 1, -156)
+    listFrame.Position = UDim2.new(0, 12, 0, 88)
+    listFrame.BackgroundTransparency = 1
+    listFrame.BorderSizePixel = 0
+    listFrame.ScrollBarThickness = 6
+    listFrame.ScrollBarImageColor3 = Color3.fromRGB(90, 90, 110)
+    listFrame.ScrollingDirection = Enum.ScrollingDirection.Y
+    listFrame.Parent = root
+    local layout = Instance.new("UIListLayout", listFrame)
+    layout.Padding = UDim.new(0, 6)
+
+    statusLabel = Instance.new("TextLabel")
+    statusLabel.Size = UDim2.new(1, -24, 0, 24)
+    statusLabel.Position = UDim2.new(0, 12, 1, -30)
+    statusLabel.BackgroundTransparency = 1
+    statusLabel.Font = Enum.Font.Gotham
+    statusLabel.TextSize = 13
+    statusLabel.TextColor3 = Color3.fromRGB(150, 150, 165)
+    statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+    statusLabel.Text = "等待刷新"
+    statusLabel.Parent = root
+
+    UIS.InputBegan:Connect(function(input, processed)
+        if processed then return end
+        if input.KeyCode == Enum.KeyCode.Escape and ServerUI.Root and ServerUI.Root.Visible then
+            ServerUI.Root.Visible = false
+        end
+    end)
+
+    ServerUI.Root = root
+end
+
+local function openServerBrowser()
+    createServerUI()
+    if os.clock() - lastBrowserFetch > 30 or #browserServers == 0 then
+        uiRefresh()
+    else
+        rebuildServerList()
+    end
 end
 
 -- ===== 自动换服 =====
@@ -318,6 +596,15 @@ local uiOk, uiErr = pcall(function()
         Icon = "user",
         Callback = function()
             doSwitch("随机")
+        end
+    })
+
+    srvSec:Button({
+        Title = "打开服务器列表",
+        Desc = "打开自定义服务器浏览器，点击列表中的服务器即可加入",
+        Icon = "shell",
+        Callback = function()
+            openServerBrowser()
         end
     })
 
