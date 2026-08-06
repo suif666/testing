@@ -1,49 +1,17 @@
--- ESP 独立测试脚本
--- 用法：复制进注入器执行（不需要主脚本）
--- 测试没问题后，再把这个文件改回远程格式即可
+-- ESP类 远程脚本（玩家ESP + NPC ESP，依赖主脚本提供 ESPTab）
+-- 主脚本需设置：getgenv().Tabs.ESPTab（或 getgenv().SutureESPTab）
+print("[ESP] 远程脚本开始执行")
 
-local WindUI = _G.WindUI
-if not WindUI then
-    local ok, res = pcall(function()
-        if not loadstring then
-            error("当前环境没有 loadstring（可能不是注入器而是 Studio），无法加载 WindUI")
-        end
-        local source = game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua")
-        local fn, compileErr = loadstring(source)
-        if not fn then
-            error(compileErr)
-        end
-        return fn()
-    end)
-
-    if not ok or not res then
-        warn("WindUI 加载失败，脚本已停止:", res)
-        return
-    end
-    WindUI = res
-    _G.WindUI = WindUI
+if getgenv().__SUTURE_ESP_LOADED then
+    return
 end
+getgenv().__SUTURE_ESP_LOADED = true
 
-local win = WindUI:CreateWindow({
-    Title = "ESP测试",
-    Icon = "user",
-    Author = "suif",
-    Folder = "ESPTest",
-    Size = UDim2.fromOffset(620, 460),
-    MinSize = Vector2.new(560, 350),
-    MaxSize = Vector2.new(900, 600),
-    Resizable = true,
-    Transparent = true,
-    Theme = "Dark",
-    SideBarWidth = 180,
-    HideSearchBar = false,
-    ScrollBarEnabled = true,
-    NewElements = true,
-})
-
-local shijueSec = win:Section({ Title = "视觉类", Icon = "palette", Locked = false })
-local Tab = shijueSec:Tab({ Title = "ESP", Icon = "user", Locked = false })
-Tab:Select()
+local Tab = (getgenv().Tabs and getgenv().Tabs.ESPTab) or getgenv().SutureESPTab
+if not Tab then
+    warn("[ESP] 未找到 ESPTab，请检查主脚本是否正确赋值")
+    return
+end
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -72,11 +40,14 @@ local defaultESP = {
     NpcTracerPosition = "中",
     NpcFontSize = 14,
 }
-local ESP = {}
+getgenv().SutureESP = getgenv().SutureESP or {}
 for k, v in pairs(defaultESP) do
-    ESP[k] = v
+    if getgenv().SutureESP[k] == nil then
+        getgenv().SutureESP[k] = v
+    end
 end
 
+local ESP = getgenv().SutureESP
 local warnedDrawing = false
 
 local function teamColor(p)
@@ -597,7 +568,7 @@ local uiOk, uiErr = pcall(function()
 end)
 
 if not uiOk then
-    warn("[ESP] UI 创建失败:", uiErr)
+    warn("[ESP] Tab UI 创建失败:", uiErr)
 else
-    print("[ESP] 独立测试脚本加载完成")
+    print("[ESP] 远程脚本加载完成")
 end
