@@ -216,6 +216,7 @@ local bdh2Tab = scriptSec:Tab({ Title = "冰大亨2", Icon = "shell", Locked = f
 local zxdyTab = scriptSec:Tab({ Title = "重型钓鱼", Icon = "shell", Locked = false })
 
 local settingsTab = win:Tab({ Title = "设置", Icon = "sliders-horizontal", Locked = false })
+local amTab = win:Tab({ Title = "自瞄", Icon = "sliders-horizontal", Locked = false })
 
 
 
@@ -428,12 +429,12 @@ moveSec:Button({
     end
 })
 
--- ============ 玩家增强：无限跳跃 / 爬墙 / 穿墙 / 重力 / 旋转 ============
+-- ============ 玩家增强：无限跳跃 / 穿墙 / 重力 / 旋转 ============
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
 
 local defaultPlayerExtra = {
-    InfJump = false, WallClimb = false, Noclip = false,
+    InfJump = false, Noclip = false,
     Spin = false, SpinSpeed = 180, Gravity = 10, GravityLock = false,
     AirJumps = 0, FakeDown = false, NoFallDamage = false,
 }
@@ -491,67 +492,6 @@ UIS.JumpRequest:Connect(function()
             local v = root.Velocity
             root.Velocity = Vector3.new(v.X, h.JumpPower, v.Z)
         end)
-    end
-end)
-
--- 爬墙：按住 W 顶住墙时自动向上爬
-local function wallInFront()
-    local c = lp.Character
-    local root = c and c:FindFirstChild("HumanoidRootPart")
-    if not root then return false end
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = { c }
-    local hit = workspace:Raycast(root.Position, root.CFrame.LookVector * 3, params)
-    return hit ~= nil
-end
-
--- 借 BS 空中攀爬的思路：隐形支撑块触发 Climbing 攀爬状态，同时向上推速度保底
-local climbPart = nil
-
-local function setClimbPart(active)
-    if active then
-        if not climbPart then
-            climbPart = Instance.new("Part")
-            climbPart.Name = "WallClimbSupport"
-            climbPart.Size = Vector3.new(2, 12, 2)
-            climbPart.Transparency = 1
-            climbPart.CanCollide = true
-            climbPart.Anchored = true
-            climbPart.Material = Enum.Material.Plastic
-            climbPart.Parent = workspace
-        end
-    elseif climbPart then
-        pcall(function()
-            climbPart:Destroy()
-        end)
-        climbPart = nil
-    end
-end
-
-RunService.Heartbeat:Connect(function()
-    if PlayerExtra.WallClimb then
-        local c = lp.Character
-        local root = c and c:FindFirstChild("HumanoidRootPart")
-        local h = c and c:FindFirstChildOfClass("Humanoid")
-        if root and h and UIS:IsKeyDown(Enum.KeyCode.W) and wallInFront() then
-            setClimbPart(true)
-            if climbPart then
-                pcall(function()
-                    h:SetStateEnabled(Enum.HumanoidStateType.Climbing, true)
-                    h.ClimbSpeed = 20
-                end)
-                climbPart.CFrame = root.CFrame * CFrame.new(0, -5, 0)
-                pcall(function()
-                    local v = root.AssemblyLinearVelocity
-                    root.AssemblyLinearVelocity = Vector3.new(v.X, 18, v.Z)
-                end)
-            end
-        else
-            setClimbPart(false)
-        end
-    else
-        setClimbPart(false)
     end
 end)
 
@@ -693,16 +633,6 @@ enhanceSec:Toggle({
     Value = PlayerExtra.InfJump or false,
     Callback = function(s)
         PlayerExtra.InfJump = s
-    end
-})
-
-enhanceSec:Toggle({
-    Title = "爬墙",
-    Desc = "按住 W 顶住墙壁时会自动向上爬",
-    Type = "Checkbox",
-    Value = PlayerExtra.WallClimb or false,
-    Callback = function(s)
-        PlayerExtra.WallClimb = s
     end
 })
 
@@ -865,31 +795,29 @@ end
 
 local Aimbot = getgenv().SutureAimbot
 
--- FOV 圈：用 ScreenGui 画圆环，不依赖注入器的 Drawing 库
-local fovGui = nil
-local fovRing = nil
-
-local function ensureFovRing()
-    if fovRing and fovRing.Parent then return end
-    if not fovGui or not fovGui.Parent then
-        fovGui = Instance.new("ScreenGui")
-        fovGui.Name = "AimbotFOV"
-        fovGui.ResetOnSpawn = false
-        fovGui.IgnoreGuiInset = true
-        local ok, p = pcall(gethui)
-        fovGui.Parent = ok and p or game:GetService("CoreGui")
-    end
-    fovRing = Instance.new("Frame")
-    fovRing.Name = "Ring"
-    fovRing.BackgroundTransparency = 1
-    fovRing.BorderSizePixel = 2
-    fovRing.BorderColor3 = Color3.fromRGB(255, 255, 255)
-    fovRing.AnchorPoint = Vector2.new(0.5, 0.5)
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(1, 0)
-    corner.Parent = fovRing
-    fovRing.Parent = fovGui
+-- FOV 圈：UI 版圆环（参考夜脚本源：UIStroke + UICorner），不依赖注入器的 Drawing 库
+local fovGui = Instance.new("ScreenGui")
+fovGui.Name = "AimbotFOV"
+fovGui.ResetOnSpawn = false
+fovGui.IgnoreGuiInset = true
+do
+    local ok, p = pcall(gethui)
+    fovGui.Parent = ok and p or game:GetService("CoreGui")
 end
+
+local fovRing = Instance.new("Frame")
+fovRing.Name = "Ring"
+fovRing.AnchorPoint = Vector2.new(0.5, 0.5)
+fovRing.Position = UDim2.new(0.5, 0, 0.5, 0)
+fovRing.Size = UDim2.fromOffset(200, 200)
+fovRing.BackgroundTransparency = 1
+fovRing.Visible = false
+fovRing.Parent = fovGui
+Instance.new("UICorner", fovRing).CornerRadius = UDim.new(1, 0)
+local fovStroke = Instance.new("UIStroke")
+fovStroke.Thickness = 2
+fovStroke.Color = Color3.fromRGB(255, 255, 255)
+fovStroke.Parent = fovRing
 
 local function getAimPart(character)
     if not character then return nil end
@@ -963,17 +891,14 @@ local function aimbotLoop()
     local cam = workspace.CurrentCamera
     if not cam then return end
 
-    -- FOV 圈（ScreenGui 圆环，随屏幕尺寸居中）
-    if Aimbot.Enabled and Aimbot.ShowFov then
+    -- FOV 圈：只跟“显示FOV圈”开关绑定，不依赖自瞄总开关
+    if Aimbot.ShowFov then
         pcall(function()
-            ensureFovRing()
-            if fovRing then
-                fovRing.Visible = true
-                fovRing.Size = UDim2.fromOffset(Aimbot.Fov * 2, Aimbot.Fov * 2)
-                fovRing.Position = UDim2.new(0.5, 0, 0.5, 0)
-            end
+            fovRing.Visible = true
+            fovRing.Size = UDim2.fromOffset(Aimbot.Fov * 2, Aimbot.Fov * 2)
+            fovRing.Position = UDim2.new(0.5, 0, 0.5, 0)
         end)
-    elseif fovRing then
+    elseif fovRing.Visible then
         fovRing.Visible = false
     end
 
@@ -991,9 +916,9 @@ end
 
 RunService.RenderStepped:Connect(aimbotLoop)
 
-local aimUi = toolTab
+local aimUi = amTab
 if not aimUi then
-    error("[自瞄] 工具类标签页没有创建成功")
+    error("[自瞄] 自瞄标签页没有创建成功")
 end
 
 aimUi:Toggle({
