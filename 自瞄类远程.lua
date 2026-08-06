@@ -23,8 +23,8 @@ local plrs = Players
 local defaultAimbot = {
     Enabled = false, ShowFov = false, Fov = 200, MaxDistance = 1000,
     Part = "Head", TeamCheck = false, WallCheck = false,
-    Smooth = 0.8, Prediction = 0.1, Trigger = "按住右键",
-    LockStrength = 0.5,
+    Smooth = 0.8, Prediction = 0.1,
+    LockStrength = 0.5, Priority = "准心优先",
 }
 getgenv().SutureAimbot = getgenv().SutureAimbot or {}
 for k, v in pairs(defaultAimbot) do
@@ -69,23 +69,11 @@ local function getAimPart(character)
     return character:FindFirstChild(Aimbot.Part)
 end
 
-local function aimTriggerActive()
-    if Aimbot.Trigger == "一直瞄准" then return true end
-    if Aimbot.Trigger == "按住右键" then
-        local ok, v = pcall(function()
-            return UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
-        end)
-        return ok and v
-    end
-    if Aimbot.Trigger == "按住F" then return UIS:IsKeyDown(Enum.KeyCode.F) end
-    return false
-end
-
 local function getAimTarget()
     local cam = workspace.CurrentCamera
     if not cam then return nil end
     local center = cam.ViewportSize / 2
-    local best, bestDist = nil, Aimbot.Fov
+    local best, bestScore = nil, math.huge
     local myChar = lp.Character
 
     for _, p in ipairs(plrs:GetPlayers()) do
@@ -105,7 +93,8 @@ local function getAimTarget()
         local screenDist = (Vector2.new(pos.X, pos.Y) - center).Magnitude
         if screenDist > Aimbot.Fov then continue end
 
-        if (cam.CFrame.Position - part.Position).Magnitude > Aimbot.MaxDistance then continue end
+        local worldDist = (cam.CFrame.Position - part.Position).Magnitude
+        if worldDist > Aimbot.MaxDistance then continue end
 
         if Aimbot.WallCheck then
             local params = RaycastParams.new()
@@ -119,8 +108,18 @@ local function getAimTarget()
             if ray and ray.Instance then continue end
         end
 
-        if screenDist < bestDist then
-            bestDist = screenDist
+        -- 按优先级打分：血量低 / 距离近 / 准心近
+        local score
+        if Aimbot.Priority == "血量低优先" then
+            score = hum.Health
+        elseif Aimbot.Priority == "距离优先" then
+            score = worldDist
+        else
+            score = screenDist
+        end
+
+        if score < bestScore then
+            bestScore = score
             best = { Character = char, Part = part }
         end
     end
@@ -145,7 +144,7 @@ local function aimbotLoop()
         fovRing.Visible = false
     end
 
-    if not Aimbot.Enabled or not aimTriggerActive() then return end
+    if not Aimbot.Enabled then return end
 
     -- 追踪鼠标移动量
     local mousePos = UIS:GetMouseLocation()
@@ -174,7 +173,7 @@ RunService.RenderStepped:Connect(aimbotLoop)
 local uiOk, uiErr = pcall(function()
     Tab:Toggle({
         Title = "自瞄开关",
-        Desc = "总开关，配合下面的触发方式使用",
+        Desc = "开启后一直自动瞄准",
         Type = "Checkbox",
         Value = Aimbot.Enabled or false,
         Callback = function(s)
@@ -225,11 +224,12 @@ local uiOk, uiErr = pcall(function()
     })
 
     Tab:Dropdown({
-        Title = "触发方式",
-        Values = { "一直瞄准", "按住右键", "按住F" },
-        Value = Aimbot.Trigger or "按住右键",
+        Title = "优先级",
+        Desc = "多个目标时优先锁定谁",
+        Values = { "血量低优先", "距离优先", "准心优先" },
+        Value = Aimbot.Priority or "准心优先",
         Callback = function(v)
-            Aimbot.Trigger = v
+            Aimbot.Priority = v
         end
     })
 
