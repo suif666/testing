@@ -391,11 +391,11 @@ lp.CharacterAdded:Connect(function(char)
     end)
 end)
 
--- 玩家类 UI 分组
-local moveSec = playerTab:Section({ Title = "移动属性", Icon = "settings", Opened = true })
-local enhanceSec = playerTab:Section({ Title = "移动增强", Icon = "user", Opened = true })
-local physSec = playerTab:Section({ Title = "物理效果", Icon = "sliders-horizontal", Opened = true })
-local otherSec = playerTab:Section({ Title = "其他", Icon = "info", Opened = true })
+-- 玩家类 UI（不折叠，全部直接挂在玩家类下）
+local moveSec = playerTab
+local enhanceSec = playerTab
+local physSec = playerTab
+local otherSec = playerTab
 
 moveSec:Slider({
     Title = "移动速度",
@@ -792,27 +792,30 @@ fyTab:Button({
 
 -- ============ 视野（FOV） ============
 local fovConn = nil
-fovTab:Slider({
-    Title = "视野角度",
-    Desc = "70 = 默认，120 = 广角，会持续锁定防止被游戏重置",
-    Step = 1,
-    Value = { Min = 70, Max = 120, Default = workspace.CurrentCamera and workspace.CurrentCamera.FieldOfView or 70 },
-    Callback = function(v)
-        local fov = tonumber(v) or 70
-        if fovConn then
-            fovConn:Disconnect()
-            fovConn = nil
-        end
-        fovConn = RunService.RenderStepped:Connect(function()
-            local cam = workspace.CurrentCamera
-            if cam and cam.FieldOfView ~= fov then
-                cam.FieldOfView = fov
+pcall(function()
+    fovTab:Slider({
+        Title = "视野角度",
+        Desc = "70 = 默认，120 = 广角，会持续锁定防止被游戏重置",
+        Step = 1,
+        Value = { Min = 70, Max = 120, Default = workspace.CurrentCamera and workspace.CurrentCamera.FieldOfView or 70 },
+        Callback = function(v)
+            local fov = tonumber(v) or 70
+            if fovConn then
+                fovConn:Disconnect()
+                fovConn = nil
             end
-        end)
-    end
-})
+            fovConn = RunService.RenderStepped:Connect(function()
+                local cam = workspace.CurrentCamera
+                if cam and cam.FieldOfView ~= fov then
+                    cam.FieldOfView = fov
+                end
+            end)
+        end
+    })
+end)
 
 -- ============ 自瞄（通用相机自瞄） ============
+local aimbotOk, aimbotErr = pcall(function()
 local defaultAimbot = {
     Enabled = false, ShowFov = true, Fov = 200, MaxDistance = 1000,
     Part = "Head", TeamCheck = false, WallCheck = false,
@@ -1035,6 +1038,11 @@ aimTab:Slider({
         Aimbot.Prediction = tonumber(v) or 0.1
     end
 })
+
+end)
+if not aimbotOk then
+    warn("[自瞄] 自瞄模块加载失败:", aimbotErr)
+end
 
 -- 即时互动（极简版，几乎不掉帧）
 getgenv().SutureHubPromptHoldCache = getgenv().SutureHubPromptHoldCache or setmetatable({}, { __mode = "k" })
