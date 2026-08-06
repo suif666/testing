@@ -78,6 +78,7 @@ local uiOk, uiErr = pcall(function()
     local listKey = ""
     local selectedName = nil
     local TargetDropdown = nil
+    local lastListRefresh = 0
 
     local function rebuildList()
         playerNameList = {}
@@ -89,10 +90,14 @@ local uiOk, uiErr = pcall(function()
     end
 
     local function updateList(force)
+        -- 限流：3 秒内最多真正刷新一次，避免频繁重建下拉框导致卡顿
+        local now = os.clock()
+        if not force and now - lastListRefresh < 3 then return end
         rebuildList()
         local key = table.concat(playerNameList, ",")
         if force or key ~= listKey then
             listKey = key
+            lastListRefresh = now
             pcall(function()
                 if TargetDropdown.Refresh then
                     TargetDropdown:Refresh(playerNameList, selectedName)
@@ -121,7 +126,7 @@ local uiOk, uiErr = pcall(function()
     Players.PlayerRemoving:Connect(function() updateList(false) end)
     task.spawn(function()
         while true do
-            task.wait(2)
+            task.wait(5)
             updateList(false)
         end
     end)
