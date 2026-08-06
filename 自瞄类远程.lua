@@ -24,6 +24,7 @@ local defaultAimbot = {
     Enabled = false, ShowFov = false, Fov = 200, MaxDistance = 1000,
     Part = "Head", TeamCheck = false, WallCheck = false,
     Smooth = 0.8, Prediction = 0.1, Trigger = "按住右键",
+    LockStrength = 0.5,
 }
 getgenv().SutureAimbot = getgenv().SutureAimbot or {}
 for k, v in pairs(defaultAimbot) do
@@ -127,6 +128,8 @@ local function getAimTarget()
     return best
 end
 
+local lastMousePos = UIS:GetMouseLocation()
+
 local function aimbotLoop()
     local cam = workspace.CurrentCamera
     if not cam then return end
@@ -144,13 +147,24 @@ local function aimbotLoop()
 
     if not Aimbot.Enabled or not aimTriggerActive() then return end
 
+    -- 追踪鼠标移动量
+    local mousePos = UIS:GetMouseLocation()
+    local mouseDelta = (mousePos - lastMousePos).Magnitude
+    lastMousePos = mousePos
+
     local target = getAimTarget()
     if target and target.Part then
         local targetPos = target.Part.Position
         if Aimbot.Prediction > 0 then
             targetPos = targetPos + target.Part.AssemblyLinearVelocity * Aimbot.Prediction
         end
-        cam.CFrame = cam.CFrame:Lerp(CFrame.new(cam.CFrame.Position, targetPos), Aimbot.Smooth)
+        local targetCF = CFrame.new(cam.CFrame.Position, targetPos)
+        if mouseDelta > 1 then
+            -- 鼠标移动中：吸附力度越大拉回越强，越小越跟手（容易移开）
+            cam.CFrame = cam.CFrame:Lerp(targetCF, Aimbot.Smooth * (Aimbot.LockStrength or 0.5))
+        else
+            cam.CFrame = cam.CFrame:Lerp(targetCF, Aimbot.Smooth)
+        end
     end
 end
 
@@ -246,6 +260,16 @@ local uiOk, uiErr = pcall(function()
         Value = { Min = 0.1, Max = 1, Default = Aimbot.Smooth or 0.8 },
         Callback = function(v)
             Aimbot.Smooth = tonumber(v) or 0.8
+        end
+    })
+
+    Tab:Slider({
+        Title = "吸附力度",
+        Desc = "数值越大越难把准星从目标上拉开，越小越容易移开",
+        Step = 1,
+        Value = { Min = 0, Max = 10, Default = math.floor((Aimbot.LockStrength or 0.5) * 10) },
+        Callback = function(v)
+            Aimbot.LockStrength = (tonumber(v) or 5) / 10
         end
     })
 
