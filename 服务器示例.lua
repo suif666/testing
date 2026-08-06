@@ -203,76 +203,90 @@ local function clearRows()
     end
 end
 
-local function makeRow(primary, secondary, dotColor, onClick)
-    local row = Instance.new("Frame")
-    row.Name = "Row"
-    row.Size = UDim2.new(1, 0, 0, 46)
-    row.BackgroundColor3 = Color3.fromRGB(30, 32, 40)
-    row.BorderSizePixel = 0
-    row.Parent = listFrame
-    Instance.new("UICorner", row).CornerRadius = UDim.new(0, 8)
-    local stroke = Instance.new("UIStroke", row)
-    stroke.Color = Color3.fromRGB(48, 52, 64)
-    stroke.Thickness = 1
+local function makeCard(primary, secondary, dotColor, ratio, actionText, onClick)
+    local card = Instance.new("Frame")
+    card.Name = "Card"
+    card.Size = UDim2.new(1, 0, 0, 78)
+    card.BackgroundColor3 = Color3.fromRGB(28, 30, 38)
+    card.BorderSizePixel = 0
+    card.Parent = listFrame
+    Instance.new("UICorner", card).CornerRadius = UDim.new(0, 12)
+    local cardStroke = Instance.new("UIStroke", card)
+    cardStroke.Color = Color3.fromRGB(48, 52, 64)
+    cardStroke.Thickness = 1
 
     if dotColor then
         local dot = Instance.new("Frame")
         dot.Size = UDim2.fromOffset(10, 10)
-        dot.Position = UDim2.new(0, 14, 0.5, -5)
+        dot.Position = UDim2.new(0, 16, 0, 18)
         dot.BackgroundColor3 = dotColor
         dot.BorderSizePixel = 0
-        dot.Parent = row
+        dot.Parent = card
         Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
     end
 
     local prim = Instance.new("TextLabel")
-    prim.Size = UDim2.new(1, -160, 1, 0)
-    prim.Position = UDim2.new(0, dotColor and 32 or 14, 0, 0)
+    prim.Size = UDim2.new(1, -150, 0, 26)
+    prim.Position = UDim2.new(0, 36, 0, 8)
     prim.BackgroundTransparency = 1
     prim.Font = Enum.Font.GothamBold
-    prim.TextSize = 15
+    prim.TextSize = 16
     prim.TextColor3 = Color3.fromRGB(235, 238, 245)
     prim.TextXAlignment = Enum.TextXAlignment.Left
     prim.Text = primary
-    prim.Parent = row
+    prim.Parent = card
 
-    if secondary then
-        local sec = Instance.new("TextLabel")
-        sec.Size = UDim2.new(0, 160, 1, 0)
-        sec.Position = UDim2.new(1, -168, 0, 0)
-        sec.BackgroundTransparency = 1
-        sec.Font = Enum.Font.Gotham
-        sec.TextSize = 13
-        sec.TextColor3 = Color3.fromRGB(140, 148, 165)
-        sec.TextXAlignment = Enum.TextXAlignment.Right
-        sec.Text = secondary
-        sec.Parent = row
+    local sec = Instance.new("TextLabel")
+    sec.Size = UDim2.new(1, -56, 0, 20)
+    sec.Position = UDim2.new(0, 36, 0, 38)
+    sec.BackgroundTransparency = 1
+    sec.Font = Enum.Font.Gotham
+    sec.TextSize = 13
+    sec.TextColor3 = Color3.fromRGB(145, 153, 170)
+    sec.TextXAlignment = Enum.TextXAlignment.Left
+    sec.Text = secondary
+    sec.Parent = card
+
+    if ratio then
+        local track = Instance.new("Frame")
+        track.Size = UDim2.new(1, -32, 0, 5)
+        track.Position = UDim2.new(0, 16, 0, 66)
+        track.BackgroundColor3 = Color3.fromRGB(42, 45, 55)
+        track.BorderSizePixel = 0
+        track.Parent = card
+        Instance.new("UICorner", track).CornerRadius = UDim.new(1, 0)
+        local fill = Instance.new("Frame")
+        fill.Size = UDim2.new(math.clamp(ratio, 0, 1), 0, 1, 0)
+        fill.BackgroundColor3 = dotColor or Color3.fromRGB(64, 130, 255)
+        fill.BorderSizePixel = 0
+        fill.Parent = track
+        Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
     end
 
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, 0, 1, 0)
-    btn.BackgroundTransparency = 1
+    btn.Size = UDim2.new(0, 58, 0, 32)
+    btn.Position = UDim2.new(1, -70, 0, 22)
+    btn.BackgroundColor3 = Color3.fromRGB(58, 116, 255)
     btn.BorderSizePixel = 0
-    btn.Text = ""
-    btn.Parent = row
-
-    local function press(active)
-        row.BackgroundColor3 = active
-            and Color3.fromRGB(44, 48, 62)
-            or Color3.fromRGB(30, 32, 40)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 14
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.Text = actionText or "加入"
+    btn.Parent = card
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+    local function setBtnColor(c)
+        btn.BackgroundColor3 = c
     end
-    btn.MouseEnter:Connect(function() press(true) end)
-    btn.MouseLeave:Connect(function() press(false) end)
+    btn.MouseEnter:Connect(function() setBtnColor(Color3.fromRGB(84, 140, 255)) end)
+    btn.MouseLeave:Connect(function() setBtnColor(Color3.fromRGB(58, 116, 255)) end)
     btn.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch
-            or input.UserInputType == Enum.UserInputType.MouseButton1 then
-            press(true)
+        if input.UserInputType == Enum.UserInputType.Touch then
+            setBtnColor(Color3.fromRGB(84, 140, 255))
         end
     end)
     btn.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch
-            or input.UserInputType == Enum.UserInputType.MouseButton1 then
-            press(false)
+        if input.UserInputType == Enum.UserInputType.Touch then
+            setBtnColor(Color3.fromRGB(58, 116, 255))
         end
     end)
     if onClick then
@@ -290,21 +304,28 @@ local function buildServersRows()
         if query == "" or id:find(query, 1, true) then
             local ratio = s.maxPlayers > 0 and (s.playing / s.maxPlayers) or 0
             local dotColor = Color3.fromHSV((1 - ratio) * 0.35, 0.75, 1)
-            local secondary = tostring(s.id):sub(1, 8)
+            local secondary = "ID: " .. tostring(s.id):sub(1, 8)
             if type(s.ping) == "number" then
                 secondary = secondary .. " · " .. math.floor(s.ping) .. "ms"
             end
             local server = s
-            makeRow(s.playing .. " / " .. s.maxPlayers, secondary, dotColor, function()
-                statusLabel.Text = "正在加入 " .. tostring(server.id) .. "（在线 " .. server.playing .. "/" .. server.maxPlayers .. "）..."
-                notify("正在加入", "在线 " .. server.playing .. "/" .. server.maxPlayers, "arrow-right", 3)
-                TeleportService:TeleportToPlaceInstance(PlaceId, server.id)
-            end)
+            makeCard(
+                s.playing .. " / " .. s.maxPlayers .. " 在线",
+                secondary,
+                dotColor,
+                ratio,
+                "加入",
+                function()
+                    statusLabel.Text = "正在加入 " .. tostring(server.id) .. "（在线 " .. server.playing .. "/" .. server.maxPlayers .. "）..."
+                    notify("正在加入", "在线 " .. server.playing .. "/" .. server.maxPlayers, "arrow-right", 3)
+                    TeleportService:TeleportToPlaceInstance(PlaceId, server.id)
+                end
+            )
             shown = shown + 1
             if shown >= 800 then break end
         end
     end
-    listFrame.CanvasSize = UDim2.new(0, 0, 0, shown * 52 + 4)
+    listFrame.CanvasSize = UDim2.new(0, 0, 0, shown * 86 + 4)
 
     if #browserServers == 0 then
         statusLabel.Text = "当前没有可用的公开服务器"
@@ -342,23 +363,25 @@ local function buildPlayersRows()
             and Color3.fromRGB(64, 130, 255)
             or Color3.fromRGB(95, 103, 120)
         local plr = p
-        makeRow(
+        makeCard(
             p.DisplayName .. (isMe and "  (你)" or ""),
             "@" .. p.Name .. " · UID " .. p.UserId .. " · 账号" .. p.AccountAge .. "天",
             dotColor,
+            nil,
+            "复制",
             function()
-            pcall(function()
-                if setclipboard then
-                    setclipboard(plr.Name)
-                    statusLabel.Text = "已复制 " .. plr.Name .. " 到剪贴板"
-                else
-                    statusLabel.Text = "当前执行器不支持复制"
-                end
-            end)
+                pcall(function()
+                    if setclipboard then
+                        setclipboard(plr.Name)
+                        statusLabel.Text = "已复制 " .. plr.Name .. " 到剪贴板"
+                    else
+                        statusLabel.Text = "当前执行器不支持复制"
+                    end
+                end)
             end
         )
     end
-    listFrame.CanvasSize = UDim2.new(0, 0, 0, #players * 52 + 4)
+    listFrame.CanvasSize = UDim2.new(0, 0, 0, #players * 86 + 4)
     statusLabel.Text = "当前服务器玩家 " .. #players .. " 人 · 点击玩家复制用户名 · 30秒自动刷新"
 end
 
@@ -435,7 +458,7 @@ local function createServerUI()
     local cam = workspace.CurrentCamera
     local viewport = cam and cam.ViewportSize or Vector2.new(1280, 720)
     local winW = math.clamp(viewport.X - 24, 300, 560)
-    local winH = math.clamp(viewport.Y - 36, 400, 760)
+    local winH = math.clamp(viewport.Y * 0.75, 400, 760)
 
     local root = Instance.new("Frame")
     root.Name = "Main"
@@ -539,7 +562,7 @@ local function createServerUI()
             local delta = input.Delta
             root.Position = UDim2.fromOffset(
                 math.clamp(root.AbsolutePosition.X + delta.X, -root.AbsoluteSize.X + 80, vp.X - 80),
-                math.clamp(root.AbsolutePosition.Y + delta.Y, 0, vp.Y - 50)
+                math.clamp(root.AbsolutePosition.Y + delta.Y, 0, vp.Y - 60)
             )
         elseif input.UserInputType == Enum.UserInputType.MouseMovement then
             local pos = input.Position
@@ -549,7 +572,7 @@ local function createServerUI()
             local newPos = pos - dragOffset
             root.Position = UDim2.fromOffset(
                 math.clamp(newPos.X, -root.AbsoluteSize.X + 80, vp.X - 80),
-                math.clamp(newPos.Y, 0, vp.Y - 50)
+                math.clamp(newPos.Y, 0, vp.Y - 60)
             )
         end
     end)
