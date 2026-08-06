@@ -47,6 +47,14 @@ local speakEnabled = false
 local speakThread = nil
 local selectedTarget = nil
 
+-- WindUI 下拉回调可能返回 table，统一解包成字符串
+local function unwrap(v)
+    if typeof(v) == "table" then
+        return v.Value or v[1]
+    end
+    return v
+end
+
 -- ===== 发送函数（兼容新旧聊天系统） =====
 local function SendChatMessage(message)
     pcall(function()
@@ -121,8 +129,9 @@ TargetDropdown = mainTab:Dropdown({
     Values = playerNameList,
     Value = playerNameList[1] or "无",
     Callback = function(v)
+        v = unwrap(v)
         selectedName = v
-        selectedTarget = Players:FindFirstChild(v)
+        selectedTarget = (typeof(v) == "string") and Players:FindFirstChild(v) or nil
     end
 })
 
@@ -170,6 +179,7 @@ mainTab:Dropdown({
     Values = { "公屏", "私聊" },
     Value = "公屏",
     Callback = function(v)
+        v = unwrap(v)
         whisperOnly = (v == "私聊")
     end
 })
