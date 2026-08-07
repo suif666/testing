@@ -199,7 +199,7 @@ local bindCardInputs = nil -- 前向声明：createServerCard 会调用它
 local uiTitleLabel = nil
 local pageIndex = 1
 local currentPageCount = 1
-local PageSize = 24
+local PageSize = 12
 local pageButtons = {}
 local pageColumn = nil
 local size12Btn = nil
@@ -233,19 +233,38 @@ local function clearRows()
     end
 end
 
+local function toV2(p)
+    if typeof(p) == "Vector3" then
+        return Vector2.new(p.X, p.Y)
+    end
+    return p
+end
+
+local function posDelta(p1, p2)
+    if not p1 or not p2 then return 0 end
+    return (p1 - p2).Magnitude
+end
+
+-- 累计位移超过 25px 或按住超过 0.8 秒就不算点击（防误触）
+local function isTap(press, input)
+    if not press or press.moved then return false end
+    if (os.clock() - press.time) >= 0.8 then return false end
+    if posDelta(toV2(input.Position), press.pos) > 25 then return false end
+    return true
+end
+
 -- 手动点击识别：按下后没滑动就抬起 = 一次点击（兼容手机执行器）
 local function bindTap(gui, callback)
     local press = nil
     gui.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.Touch
             or input.UserInputType == Enum.UserInputType.MouseButton1 then
-            press = { input = input, time = os.clock(), moved = false }
+            press = { input = input, pos = toV2(input.Position), time = os.clock(), moved = false }
         end
     end)
     gui.InputChanged:Connect(function(input)
         if press and input == press.input then
-            local d = input.Delta
-            if d and (math.abs(d.X) > 25 or math.abs(d.Y) > 25) then
+            if posDelta(toV2(input.Position), press.pos) > 25 then
                 press.moved = true
             end
         end
@@ -254,7 +273,7 @@ local function bindTap(gui, callback)
         if press and input == press.input then
             local p = press
             press = nil
-            if not p.moved and (os.clock() - p.time) < 0.8 then
+            if isTap(p, input) then
                 callback()
             end
         end
@@ -517,23 +536,44 @@ local function buildList()
     local gridW = viewport.X - 72
     local gridH = viewport.Y - 196
     local gap = 10
-    local cols = gridW > 700 and 5 or (gridW > 460 and 4 or 3)
     local minCell = 56
-    local rows = math.max(1, math.ceil(PageSize / cols))
-    local cellW = (gridW - gap * (cols - 1)) / cols
-    local cellH = (gridH - 12) / rows - gap
-    local cell = math.clamp(math.min(cellW, cellH), minCell, 165)
-    local maxRows = math.floor((gridH - 12) / (minCell + gap))
-    if rows > maxRows then
-        rows = math.max(1, maxRows)
-        cell = math.min(cellW, (gridH - 12) / rows - gap)
+
+    -- 尝试 2-8 列，选出能把 PageSize 个完整放下且卡片最大的方案
+    local cols = 3
+    local rows = 1
+    local cell = minCell
+    local bestCell = 0
+    for testCols = 2, 8 do
+        local testRows = math.max(1, math.ceil(PageSize / testCols))
+        local cw = (gridW - gap * (testCols - 1)) / testCols
+        local ch = (gridH - 12) / testRows - gap
+        local c = math.min(cw, ch)
+        if c >= minCell and c > bestCell then
+            bestCell = c
+            cols = testCols
+            rows = testRows
+            cell = math.min(c, 165)
+        end
     end
-    local cap = math.min(PageSize, rows * cols)
+    if bestCell == 0 then
+        cols = math.max(1, math.floor((gridW + gap) / (minCell + gap)))
+        rows = math.max(1, math.floor((gridH - 12) / (minCell + gap)))
+        cell = minCell
+    end
+
+    local cap = PageSize
+    if bestCell == 0 then
+        cap = math.min(PageSize, rows * cols)
+    end
     local pageCount = math.max(1, math.ceil(#filtered / cap))
     if pageIndex > pageCount then
         pageIndex = pageCount
     end
     updatePageButtons(pageCount)
+
+    -- 整行居中，避免卡片挤在左边
+    local totalRowW = cols * cell + (cols - 1) * gap
+    local startX = math.max(0, math.floor((gridW - totalRowW) / 2))
 
     local startIdx = (pageIndex - 1) * cap + 1
     local endIdx = math.min(pageIndex * cap, #filtered)
@@ -544,7 +584,7 @@ local function buildList()
         local col = (idxInPage - 1) % cols
         local row = math.floor((idxInPage - 1) / cols)
         local okc, errc = pcall(createServerCard, s, #filtered > 1 and s == recommended, i,
-            12 + col * (cell + gap), 12 + row * (cell + gap), cell, s.playing >= s.maxPlayers)
+            startX + col * (cell + gap), 12 + row * (cell + gap), cell, s.playing >= s.maxPlayers)
         if not okc and not cardErr then
             cardErr = tostring(errc)
         end
@@ -602,14 +642,14 @@ end
 -- ===== 卡片点击：直接加入（滚动区本体命中检测，兼容手机） =====
 local function startGridPress(input, cardInfo)
     if not cardInfo then return end
-    gridPress = { input = input, time = os.clock(), moved = false, card = cardInfo }
+    gridPress = { input = input, pos = toV2(input.Position), time = os.clock(), moved = false, card = cardInfo }
 end
 
 local function finishGridPress(input)
     if not gridPress or input ~= gridPress.input then return end
     local p = gridPress
     gridPress = nil
-    if p.card and not p.moved and (os.clock() - p.time) < 0.8 then
+    if p.card and isTap(p, input) then
         local srv = p.card.server
         if p.card.full then
             statusLabel.Text = "服务器" .. p.card.index .. " 已满，无法加入"
@@ -631,8 +671,7 @@ function bindCardInputs(gui, cardInfo)
     end)
     gui.InputChanged:Connect(function(input)
         if gridPress and input == gridPress.input then
-            local d = input.Delta
-            if d and (math.abs(d.X) > 25 or math.abs(d.Y) > 25) then
+            if posDelta(toV2(input.Position), gridPress.pos) > 25 then
                 gridPress.moved = true
             end
         end
@@ -843,8 +882,7 @@ local function createServerUI()
     end)
     cardGrid.InputChanged:Connect(function(input)
         if gridPress and input == gridPress.input then
-            local d = input.Delta
-            if d and (math.abs(d.X) > 25 or math.abs(d.Y) > 25) then
+            if posDelta(toV2(input.Position), gridPress.pos) > 25 then
                 gridPress.moved = true
             end
         end
@@ -885,13 +923,12 @@ local function createServerUI()
         local cy = pos.Y - pageColumn.AbsolutePosition.Y + pageColumn.CanvasPosition.Y
         local pg = math.floor(cy / PAGE_PITCH) + 1
         if pg >= 1 and pg <= currentPageCount then
-            pagePress = { input = input, time = os.clock(), moved = false, page = pg }
+            pagePress = { input = input, pos = toV2(input.Position), time = os.clock(), moved = false, page = pg }
         end
     end)
     pageColumn.InputChanged:Connect(function(input)
         if pagePress and input == pagePress.input then
-            local d = input.Delta
-            if d and (math.abs(d.X) > 25 or math.abs(d.Y) > 25) then
+            if posDelta(toV2(input.Position), pagePress.pos) > 25 then
                 pagePress.moved = true
             end
         end
@@ -900,7 +937,7 @@ local function createServerUI()
         if pagePress and input == pagePress.input then
             local p = pagePress
             pagePress = nil
-            if not p.moved and (os.clock() - p.time) < 0.8 then
+            if isTap(p, input) then
                 pageIndex = p.page
                 buildList()
             end
