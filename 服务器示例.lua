@@ -191,12 +191,18 @@ local cardGrid = nil
 local lastSig = nil
 local cardRects = {}
 local gridPress = nil
-local SortMode = "人数最多"
-local serverIndex = 0
+local Filter = { PingLow = false, Most = true, Least = false }
 local sortPingBtn = nil
 local sortMostBtn = nil
 local sortLeastBtn = nil
 local bindCardInputs = nil -- 前向声明：createServerCard 会调用它
+local uiTitleLabel = nil
+local pageIndex = 1
+local currentPageCount = 1
+local pageButtons = {}
+local pageColumn = nil
+local pagePrevBtn = nil
+local pageNextBtn = nil
 local TweenService = game:GetService("TweenService")
 
 -- 打开列表时隐藏 WindUI 主窗口，防止透明窗口挡掉触摸；关闭时恢复
@@ -226,12 +232,11 @@ local function clearRows()
 end
 
 -- 根据屏幕宽度算方形卡片尺寸（手机 3 列 / 平板 4 列 / 电脑 5 列）
-local function computeCell()
-    local viewport = (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize) or Vector2.new(1280, 720)
+local function computeCell(availW)
+    availW = availW or 500
     local gap = 10
-    local sidePad = 24
-    local cols = viewport.X > 900 and 5 or (viewport.X > 600 and 4 or 3)
-    local cell = math.clamp((viewport.X - sidePad * 2 - gap * (cols - 1)) / cols, 90, 170)
+    local cols = availW > 700 and 5 or (availW > 460 and 4 or 3)
+    local cell = math.clamp((availW - gap * (cols - 1)) / cols, 80, 165)
     return cell, gap, cols
 end
 
@@ -288,15 +293,26 @@ local function currentLine()
 end
 
 local function sortServers(list)
+    local usePing = Filter.PingLow
+    local useMost = Filter.Most
+    local useLeast = Filter.Least
+    if not usePing and not useMost and not useLeast then
+        useMost = true
+    end
     table.sort(list, function(a, b)
-        if SortMode == "ping最低" then
+        if usePing then
             local pa = type(a.ping) == "number" and a.ping or math.huge
             local pb = type(b.ping) == "number" and b.ping or math.huge
-            return pa < pb
-        elseif SortMode == "人数最少" then
+            if pa ~= pb then
+                return pa < pb
+            end
+        end
+        if useMost then
+            return a.playing > b.playing
+        elseif useLeast then
             return a.playing < b.playing
         end
-        return a.playing > b.playing
+        return false
     end)
 end
 
@@ -304,14 +320,12 @@ local function updateSortButtons()
     if not sortPingBtn then return end
     local activeC = Color3.fromRGB(108, 92, 231)
     local idleC = Color3.fromRGB(30, 30, 38)
-    sortPingBtn.BackgroundColor3 = SortMode == "ping最低" and activeC or idleC
-    sortMostBtn.BackgroundColor3 = SortMode == "人数最多" and activeC or idleC
-    sortLeastBtn.BackgroundColor3 = SortMode == "人数最少" and activeC or idleC
+    sortPingBtn.BackgroundColor3 = Filter.PingLow and activeC or idleC
+    sortMostBtn.BackgroundColor3 = Filter.Most and activeC or idleC
+    sortLeastBtn.BackgroundColor3 = Filter.Least and activeC or idleC
 end
 
-local function createServerCard(server, recommended, x, y, cell)
-    serverIndex = serverIndex + 1
-
+local function createServerCard(server, recommended, index, x, y, cell)
     local card = Instance.new("TextButton")
     card.Name = "ServerCard"
     card.Size = UDim2.fromOffset(cell, cell)
@@ -337,7 +351,7 @@ local function createServerCard(server, recommended, x, y, cell)
     idLabel.Size = UDim2.new(1, 0, 0, 18)
     idLabel.Position = UDim2.new(0, 0, 0, 0)
     idLabel.BackgroundTransparency = 1
-    idLabel.Text = "服务器" .. serverIndex .. (recommended and " ★" or "")
+    idLabel.Text = "服务器" .. index .. (recommended and " ★" or "")
     idLabel.TextColor3 = Color3.fromRGB(80, 180, 255)
     idLabel.TextSize = 13
     idLabel.Font = Enum.Font.GothamBold
@@ -398,7 +412,7 @@ local function createServerCard(server, recommended, x, y, cell)
             press(false)
         end
     end)
-    local cardInfo = { server = server, recommended = recommended, index = serverIndex }
+    local cardInfo = { server = server, recommended = recommended, index = index }
     cardRects[#cardRects + 1] = { x = x, y = y, w = cell, h = cell, card = cardInfo }
     bindCardInputs(card, cardInfo)
 end
@@ -413,15 +427,57 @@ local function updateStatusLine1()
     statusLabel.Text = currentLine() .. "\n" .. line2
 end
 
+-- 右侧页数按钮（只显示当前页附近的页码，前后用 ‹ › 翻）
+local function updatePageButtons(pageCount)
+    if not pageColumn then return end
+    currentPageCount = pageCount
+
+    local viewport = (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize) or Vector2.new(1280, 720)
+    local winSize = math.clamp(math.floor((viewport.Y - 196 - 70) / 33), 3, 11)
+    local startP = math.max(1, pageIndex - 5)
+    local endP = math.min(pageCount, startP + winSize - 1)
+    startP = math.max(1, endP - winSize + 1)
+
+    for i = 1, pageCount do
+        local visible = i >= startP and i <= endP
+        local btn = pageButtons[i]
+        if visible then
+            if not btn then
+                btn = Instance.new("TextButton")
+                btn.LayoutOrder = 2
+                btn.Size = UDim2.new(0, 34, 0, 28)
+                btn.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
+                btn.BorderSizePixel = 0
+                btn.TextColor3 = Color3.fromRGB(220, 220, 230)
+                btn.TextSize = 12
+                btn.Font = Enum.Font.GothamBold
+                btn.Parent = pageColumn
+                Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 7)
+                local idx = i
+                bindTap(btn, function()
+                    pageIndex = idx
+                    buildList()
+                end)
+                pageButtons[i] = btn
+            end
+            btn.Visible = true
+            btn.Text = tostring(i)
+            btn.BackgroundColor3 = (i == pageIndex)
+                and Color3.fromRGB(108, 92, 231)
+                or Color3.fromRGB(30, 30, 38)
+        elseif btn then
+            btn.Visible = false
+        end
+    end
+end
+
 local function buildList()
     if not statusLabel or not searchBox then return end
     clearRows()
     updateSortButtons()
 
-    serverIndex = 0
     sortServers(browserServers)
     local query = searchBox.Text:lower()
-    local shown = 0
     local recommended = nil
     for _, s in ipairs(browserServers) do
         if not recommended or s.playing < recommended.playing then
@@ -429,38 +485,57 @@ local function buildList()
         end
     end
 
-    local cell, gap, cols = computeCell()
-    local cardErr = nil
+    local filtered = {}
     for _, s in ipairs(browserServers) do
         local id = tostring(s.id):lower()
         if query == "" or id:find(query, 1, true) then
-            local col = shown % cols
-            local row = math.floor(shown / cols)
-            local okc, errc = pcall(createServerCard, s, #browserServers > 1 and s == recommended,
-                12 + col * (cell + gap), 12 + row * (cell + gap), cell)
-            if not okc and not cardErr then
-                cardErr = tostring(errc)
-            end
-            shown = shown + 1
-            if shown >= 300 then break end
+            table.insert(filtered, s)
         end
     end
 
-    local rows = math.ceil(shown / cols)
-    cardGrid.CanvasSize = UDim2.new(0, 0, 0, 12 + rows * (cell + gap) + 12)
+    if uiTitleLabel then
+        uiTitleLabel.Text = "Suture Hub · 服务器选择（共 " .. #browserServers .. " 个）"
+    end
+
+    local viewport = (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize) or Vector2.new(1280, 720)
+    local gridW = viewport.X - 72
+    local gridH = viewport.Y - 196
+    local cell, gap, cols = computeCell(gridW)
+    local rows = math.max(1, math.floor((gridH - 12) / (cell + gap)))
+    local cap = cols * rows
+    local pageCount = math.max(1, math.ceil(#filtered / cap))
+    if pageIndex > pageCount then
+        pageIndex = pageCount
+    end
+    updatePageButtons(pageCount)
+
+    local startIdx = (pageIndex - 1) * cap + 1
+    local endIdx = math.min(pageIndex * cap, #filtered)
+    local cardErr = nil
+    for i = startIdx, endIdx do
+        local s = filtered[i]
+        local idxInPage = i - (pageIndex - 1) * cap
+        local col = (idxInPage - 1) % cols
+        local row = math.floor((idxInPage - 1) / cols)
+        local okc, errc = pcall(createServerCard, s, #filtered > 1 and s == recommended, i,
+            12 + col * (cell + gap), 12 + row * (cell + gap), cell)
+        if not okc and not cardErr then
+            cardErr = tostring(errc)
+        end
+    end
+
+    cardGrid.CanvasSize = UDim2.new(0, 0, 0, rows * (cell + gap) + 24)
 
     local line1 = currentLine()
     if cardErr then
         statusLabel.Text = line1 .. "\n卡片创建出错: " .. cardErr
         warn("[服务器] 卡片创建出错:", cardErr)
-    elseif #browserServers == 0 then
-        statusLabel.Text = line1 .. "\n当前没有可用的公开服务器"
-    elseif shown == 0 then
+    elseif #filtered == 0 then
         statusLabel.Text = line1 .. "\n没有匹配「" .. searchBox.Text .. "」的服务器"
     else
         local suffix = ""
         if searchBox.Text ~= "" then suffix = "（筛选结果）" end
-        statusLabel.Text = line1 .. "\n共 " .. #browserServers .. " 个可用服务器，显示前 " .. shown .. " 个" .. suffix
+        statusLabel.Text = line1 .. "\n共 " .. #filtered .. " 个服务器 · 第 " .. pageIndex .. "/" .. pageCount .. " 页" .. suffix
             .. " · " .. os.date("%H:%M:%S") .. " · 3秒自动刷新"
     end
 end
@@ -571,16 +646,16 @@ local function createServerUI()
     header.BorderSizePixel = 0
     header.Parent = root
 
-    local titleLabel = Instance.new("TextLabel")
-    titleLabel.Size = UDim2.new(0.34, -20, 1, 0)
-    titleLabel.Position = UDim2.new(0, 16, 0, 0)
-    titleLabel.BackgroundTransparency = 1
-    titleLabel.Text = "Suture Hub · 服务器选择"
-    titleLabel.TextColor3 = Color3.fromRGB(240, 240, 245)
-    titleLabel.TextSize = 17
-    titleLabel.Font = Enum.Font.GothamBold
-    titleLabel.TextXAlignment = Enum.TextXAlignment.Left
-    titleLabel.Parent = header
+    uiTitleLabel = Instance.new("TextLabel")
+    uiTitleLabel.Size = UDim2.new(0.34, -20, 1, 0)
+    uiTitleLabel.Position = UDim2.new(0, 16, 0, 0)
+    uiTitleLabel.BackgroundTransparency = 1
+    uiTitleLabel.Text = "Suture Hub · 服务器选择（获取中...）"
+    uiTitleLabel.TextColor3 = Color3.fromRGB(240, 240, 245)
+    uiTitleLabel.TextSize = 17
+    uiTitleLabel.Font = Enum.Font.GothamBold
+    uiTitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    uiTitleLabel.Parent = header
 
     searchBox = Instance.new("TextBox")
     searchBox.Size = UDim2.new(1, -24, 0, 36)
@@ -644,23 +719,32 @@ local function createServerUI()
         btn.Parent = root
         Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
         bindTap(btn, function()
-            SortMode = mode
+            if mode == "ping" then
+                Filter.PingLow = not Filter.PingLow
+            elseif mode == "most" then
+                Filter.Most = not Filter.Most
+                if Filter.Most then Filter.Least = false end
+            elseif mode == "least" then
+                Filter.Least = not Filter.Least
+                if Filter.Least then Filter.Most = false end
+            end
             buildList()
         end)
         return btn
     end
-    sortPingBtn = makeSortBtn("Ping最低", "ping最低", 12)
-    sortMostBtn = makeSortBtn("人数最多", "人数最多", 12 + btnW + gap)
-    sortLeastBtn = makeSortBtn("人数最少", "人数最少", 12 + (btnW + gap) * 2)
+    sortPingBtn = makeSortBtn("Ping最低", "ping", 12)
+    sortMostBtn = makeSortBtn("人数最多", "most", 12 + btnW + gap)
+    sortLeastBtn = makeSortBtn("人数最少", "least", 12 + (btnW + gap) * 2)
 
     -- 多列网格
     cardGrid = Instance.new("ScrollingFrame")
-    cardGrid.Size = UDim2.new(1, -24, 1, -196)
+    cardGrid.Size = UDim2.new(1, -72, 1, -196)
     cardGrid.Position = UDim2.new(0, 12, 0, 134)
     cardGrid.BackgroundTransparency = 1
     cardGrid.BorderSizePixel = 0
     cardGrid.ScrollBarThickness = 4
     cardGrid.ScrollBarImageColor3 = Color3.fromRGB(80, 80, 100)
+    cardGrid.ScrollingEnabled = false
     cardGrid.ScrollingDirection = Enum.ScrollingDirection.Y
     cardGrid.Parent = root
 
@@ -695,6 +779,55 @@ local function createServerUI()
     cardGrid:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
         if gridPress then
             gridPress.moved = true
+        end
+    end)
+
+    -- 右侧页数栏
+    pageColumn = Instance.new("Frame")
+    pageColumn.Name = "PageColumn"
+    pageColumn.Size = UDim2.new(0, 40, 1, -196)
+    pageColumn.Position = UDim2.new(1, -54, 0, 134)
+    pageColumn.BackgroundTransparency = 1
+    pageColumn.BorderSizePixel = 0
+    pageColumn.Parent = root
+    local pageLayout = Instance.new("UIListLayout", pageColumn)
+    pageLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    pageLayout.Padding = UDim.new(0, 5)
+    pageLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+
+    pagePrevBtn = Instance.new("TextButton")
+    pagePrevBtn.LayoutOrder = 1
+    pagePrevBtn.Size = UDim2.new(0, 34, 0, 28)
+    pagePrevBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
+    pagePrevBtn.BorderSizePixel = 0
+    pagePrevBtn.Text = "<"
+    pagePrevBtn.TextColor3 = Color3.fromRGB(200, 200, 210)
+    pagePrevBtn.TextSize = 15
+    pagePrevBtn.Font = Enum.Font.GothamBold
+    pagePrevBtn.Parent = pageColumn
+    Instance.new("UICorner", pagePrevBtn).CornerRadius = UDim.new(0, 7)
+    bindTap(pagePrevBtn, function()
+        if pageIndex > 1 then
+            pageIndex = pageIndex - 1
+            buildList()
+        end
+    end)
+
+    pageNextBtn = Instance.new("TextButton")
+    pageNextBtn.LayoutOrder = 3
+    pageNextBtn.Size = UDim2.new(0, 34, 0, 28)
+    pageNextBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
+    pageNextBtn.BorderSizePixel = 0
+    pageNextBtn.Text = ">"
+    pageNextBtn.TextColor3 = Color3.fromRGB(200, 200, 210)
+    pageNextBtn.TextSize = 15
+    pageNextBtn.Font = Enum.Font.GothamBold
+    pageNextBtn.Parent = pageColumn
+    Instance.new("UICorner", pageNextBtn).CornerRadius = UDim.new(0, 7)
+    bindTap(pageNextBtn, function()
+        if pageIndex < currentPageCount then
+            pageIndex = pageIndex + 1
+            buildList()
         end
     end)
 
