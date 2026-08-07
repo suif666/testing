@@ -196,6 +196,7 @@ local serverIndex = 0
 local sortPingBtn = nil
 local sortMostBtn = nil
 local sortLeastBtn = nil
+local bindCardInputs = nil -- 前向声明：createServerCard 会调用它
 local TweenService = game:GetService("TweenService")
 
 -- 打开列表时隐藏 WindUI 主窗口，防止透明窗口挡掉触摸；关闭时恢复
@@ -435,13 +436,17 @@ local function buildList()
     end
 
     local cell, gap, cols = computeCell()
+    local cardErr = nil
     for _, s in ipairs(browserServers) do
         local id = tostring(s.id):lower()
         if query == "" or id:find(query, 1, true) then
             local col = shown % cols
             local row = math.floor(shown / cols)
-            pcall(createServerCard, s, #browserServers > 1 and s == recommended,
+            local okc, errc = pcall(createServerCard, s, #browserServers > 1 and s == recommended,
                 12 + col * (cell + gap), 12 + row * (cell + gap), cell)
+            if not okc and not cardErr then
+                cardErr = tostring(errc)
+            end
             shown = shown + 1
             if shown >= 300 then break end
         end
@@ -451,7 +456,10 @@ local function buildList()
     cardGrid.CanvasSize = UDim2.new(0, 0, 0, 12 + rows * (cell + gap) + 12)
 
     local line1 = currentLine()
-    if #browserServers == 0 then
+    if cardErr then
+        statusLabel.Text = line1 .. "\n卡片创建出错: " .. cardErr
+        warn("[服务器] 卡片创建出错:", cardErr)
+    elseif #browserServers == 0 then
         statusLabel.Text = line1 .. "\n当前没有可用的公开服务器"
     elseif shown == 0 then
         statusLabel.Text = line1 .. "\n没有匹配「" .. searchBox.Text .. "」的服务器"
@@ -512,7 +520,7 @@ local function finishGridPress(input)
     end
 end
 
-local function bindCardInputs(gui, cardInfo)
+function bindCardInputs(gui, cardInfo)
     gui.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.Touch
             or input.UserInputType == Enum.UserInputType.MouseButton1 then
