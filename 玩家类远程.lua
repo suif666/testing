@@ -41,6 +41,16 @@ local function applyMovementToHumanoid(h)
     if h.JumpPower ~= MoveCfg.JumpPower then
         h.JumpPower = MoveCfg.JumpPower
     end
+    -- 跳跃高度过高时落地会摔死，自动挂隐形保护罩（只加不删，避免误删游戏自带的）
+    if h.JumpPower > 120 and h.Parent then
+        pcall(function()
+            if not h.Parent:FindFirstChildOfClass("ForceField") then
+                local ff = Instance.new("ForceField")
+                ff.Visible = false
+                ff.Parent = h.Parent
+            end
+        end)
+    end
 end
 
 local function applyMovement()
@@ -74,7 +84,7 @@ end)
 local defaultPlayerExtra = {
     InfJump = false, Noclip = false,
     Spin = false, SpinSpeed = 180, Gravity = 10, GravityLock = false,
-    AirJumps = 0, FakeDown = false, NoFallDamage = false,
+    AirJumps = 0, NoFallDamage = false,
 }
 getgenv().SuturePlayerExtra = getgenv().SuturePlayerExtra or {}
 for k, v in pairs(defaultPlayerExtra) do
@@ -148,7 +158,8 @@ RunService.Stepped:Connect(function()
     if not PlayerExtra.Noclip then return end
     local c = lp.Character
     local h = c and c:FindFirstChildOfClass("Humanoid")
-    if not c or not h then return end
+    local root = c and c:FindFirstChild("HumanoidRootPart")
+    if not c or not h or not root then return end
     local moving = h.MoveDirection.Magnitude > 0.5
     for _, part in ipairs(c:GetDescendants()) do
         if part:IsA("BasePart") then
@@ -156,6 +167,11 @@ RunService.Stepped:Connect(function()
                 part.CanCollide = not moving
             end)
         end
+    end
+    -- 防止无碰撞时下沉穿地板摔死：移动中下落时把竖直速度清零
+    if moving and root.Velocity.Y < 0 then
+        local v = root.Velocity
+        root.Velocity = Vector3.new(v.X, 0, v.Z)
     end
 end)
 
@@ -184,89 +200,6 @@ RunService.Heartbeat:Connect(function(step)
     end
 end)
 
--- ============ 伪装倒地（布娃娃，参考 BS 的 toggleRagdoll） ============
-local motorBackup = {}
-
-local function applyFakeDown(on)
-    local char = lp.Character
-    if not char then return end
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    local root = char:FindFirstChild("HumanoidRootPart")
-    if not hum or not root or hum.Health <= 0 then return end
-
-    if on then
-        -- 清掉旧备份，进入物理状态
-        motorBackup = {}
-        pcall(function()
-            hum:ChangeState(Enum.HumanoidStateType.Physics)
-            hum.AutoRotate = false
-        end)
-
-        -- 把所有 Motor6D 换成球窝约束，四肢变成真正的布娃娃
-        for _, joint in ipairs(char:GetDescendants()) do
-            if joint:IsA("Motor6D") then
-                pcall(function()
-                    local socket = Instance.new("BallSocketConstraint")
-                    local a1 = Instance.new("Attachment")
-                    local a2 = Instance.new("Attachment")
-
-                    a1.CFrame = joint.C0
-                    a2.CFrame = joint.C1
-                    a1.Parent = joint.Part0
-                    a2.Parent = joint.Part1
-
-                    socket.Attachment0 = a1
-                    socket.Attachment1 = a2
-                    socket.Parent = joint.Parent
-                    socket.LimitsEnabled = true
-                    socket.TwistLimitsEnabled = true
-
-                    motorBackup[#motorBackup + 1] = {
-                        Part0 = joint.Part0,
-                        Part1 = joint.Part1,
-                        C0 = joint.C0,
-                        C1 = joint.C1,
-                        Parent = joint.Parent,
-                    }
-
-                    joint:Destroy()
-                end)
-            end
-        end
-
-        pcall(function()
-            root.Velocity = Vector3.new(0, 15, 0)
-        end)
-    else
-        -- 还原 Motor6D
-        for _, data in ipairs(motorBackup) do
-            pcall(function()
-                local motor = Instance.new("Motor6D")
-                motor.Part0 = data.Part0
-                motor.Part1 = data.Part1
-                motor.C0 = data.C0
-                motor.C1 = data.C1
-                motor.Parent = data.Parent
-            end)
-        end
-        motorBackup = {}
-
-        pcall(function()
-            hum:ChangeState(Enum.HumanoidStateType.GettingUp)
-            hum.AutoRotate = true
-        end)
-
-        -- 清理残留的约束和附件
-        for _, item in ipairs(char:GetDescendants()) do
-            if item:IsA("BallSocketConstraint") or item:IsA("Attachment") then
-                pcall(function()
-                    item:Destroy()
-                end)
-            end
-        end
-    end
-end
-
 -- ============ 无伤坠落 ============
 local function applyNoFallDamage(on)
     local char = lp.Character
@@ -288,15 +221,13 @@ local function applyNoFallDamage(on)
     end
 end
 
--- 角色重生后自动补上开启中的伪装倒地 / 无伤坠落
+-- 角色重生后自动补上开启中的无伤坠落
 lp.CharacterAdded:Connect(function(char)
     task.spawn(function()
         local hum = char:WaitForChild("Humanoid", 8)
-        if hum then
+        local root = char:WaitForChild("HumanoidRootPart", 8)
+        if hum and root then
             task.wait(0.2)
-            if PlayerExtra.FakeDown then
-                applyFakeDown(true)
-            end
             if PlayerExtra.NoFallDamage then
                 applyNoFallDamage(true)
             end
@@ -313,7 +244,7 @@ local uiOk, uiErr = pcall(function()
 
     moveSec:Slider({
         Title = "移动速度",
-        Desc = "修改并锁定 WalkSpeed",
+        Desc = "修改并锁定 WalkSpeed，防止被游戏重置",
         Step = 1,
         Value = { Min = 16, Max = 100, Default = MoveCfg.WalkSpeed or 16 },
         Callback = function(v)
@@ -324,7 +255,7 @@ local uiOk, uiErr = pcall(function()
 
     moveSec:Slider({
         Title = "跳跃高度",
-        Desc = "修改并锁定 JumpPower",
+        Desc = "修改并锁定 JumpPower，防止被游戏重置",
         Step = 1,
         Value = { Min = 50, Max = 200, Default = MoveCfg.JumpPower or 50 },
         Callback = function(v)
@@ -335,7 +266,7 @@ local uiOk, uiErr = pcall(function()
 
     moveSec:Button({
         Title = "恢复默认属性",
-        Desc = "恢复默认速度和跳跃 其实拉到最低就是默认了",
+        Desc = "恢复默认速度和跳跃，并继续锁定默认值",
         Callback = function()
             MoveCfg.WalkSpeed = 16
             MoveCfg.JumpPower = 50
@@ -345,7 +276,7 @@ local uiOk, uiErr = pcall(function()
 
     enhanceSec:Toggle({
         Title = "无限跳跃",
-        Desc = "在空中可以继续跳跃",
+        Desc = "在空中可以连续跳跃，键盘和手机跳跃键都有效",
         Type = "Checkbox",
         Value = PlayerExtra.InfJump or false,
         Callback = function(s)
@@ -355,7 +286,7 @@ local uiOk, uiErr = pcall(function()
 
     enhanceSec:Slider({
         Title = "空中跳跃次数",
-        Desc = "0=关闭 字面意思 可以在空中额外跳跃",
+        Desc = "0 = 关闭；空中可额外跳跃的次数（无限跳跃开启时优先，不受此限制）",
         Step = 1,
         Value = { Min = 0, Max = 20, Default = PlayerExtra.AirJumps or 0 },
         Callback = function(v)
@@ -365,8 +296,8 @@ local uiOk, uiErr = pcall(function()
     })
 
     enhanceSec:Toggle({
-        Title = "穿墙",
-        Desc = "无视墙壁 直接穿过",
+        Title = "穿墙（Noclip）",
+        Desc = "移动时无视碰撞，停止移动恢复碰撞，关闭后全部恢复",
         Type = "Checkbox",
         Value = PlayerExtra.Noclip or false,
         Callback = function(s)
@@ -379,7 +310,7 @@ local uiOk, uiErr = pcall(function()
 
     physSec:Slider({
         Title = "修改重力",
-        Desc = "0=无重力，10=正常重力",
+        Desc = "0 = 无重力，10 = 正常重力(196.2)，中间按比例，移动滑块后持续锁定",
         Step = 1,
         Value = { Min = 0, Max = 10, Default = PlayerExtra.Gravity or 10 },
         Callback = function(v)
@@ -411,7 +342,7 @@ local uiOk, uiErr = pcall(function()
 
     physSec:Toggle({
         Title = "人物旋转",
-        Desc = "开启后角色持续旋转 不影响移动",
+        Desc = "开启后角色持续旋转",
         Type = "Checkbox",
         Value = PlayerExtra.Spin or false,
         Callback = function(s)
@@ -424,19 +355,8 @@ local uiOk, uiErr = pcall(function()
     })
 
     otherSec:Toggle({
-        Title = "伪装倒地",
-        Desc = "启用开启布娃娃状态",
-        Type = "Checkbox",
-        Value = PlayerExtra.FakeDown or false,
-        Callback = function(s)
-            PlayerExtra.FakeDown = s
-            applyFakeDown(s)
-        end
-    })
-
-    otherSec:Toggle({
         Title = "无伤坠落",
-        Desc = "免疫坠落伤害 有时会拦截其他伤害",
+        Desc = "隐形保护罩，免疫坠落伤害（同时也会免疫其他伤害）",
         Type = "Checkbox",
         Value = PlayerExtra.NoFallDamage or false,
         Callback = function(s)
