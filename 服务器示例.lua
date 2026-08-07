@@ -188,10 +188,9 @@ end
 -- ===== 自定义服务器列表界面（全屏网格版） =====
 local refreshing = false
 local cardGrid = nil
-local modalRoot = nil
-local modalDetail = nil
-local pendingJoin = nil
 local lastSig = nil
+local cardRects = {}
+local gridPress = nil
 local SortMode = "人数最多"
 local serverIndex = 0
 local sortPingBtn = nil
@@ -217,8 +216,9 @@ local function showMainWindow()
 end
 
 local function clearRows()
+    cardRects = {}
     for _, child in ipairs(cardGrid:GetChildren()) do
-        if child:IsA("Frame") then
+        if child:IsA("GuiObject") then
             child:Destroy()
         end
     end
@@ -380,7 +380,7 @@ local function createServerCard(server, recommended, x, y, cell)
     regionLabel.Size = UDim2.new(1, 0, 0, 16)
     regionLabel.Position = UDim2.new(0, 0, 1, -16)
     regionLabel.BackgroundTransparency = 1
-    regionLabel.Text = server.region and tostring(server.region) or "点击查看"
+    regionLabel.Text = server.region and tostring(server.region) or "点击加入"
     regionLabel.TextColor3 = Color3.fromRGB(130, 130, 145)
     regionLabel.TextSize = 11
     regionLabel.Font = Enum.Font.Gotham
@@ -404,9 +404,9 @@ local function createServerCard(server, recommended, x, y, cell)
             press(false)
         end
     end)
-    bindTap(card, function()
-        openJoinModal(server, recommended, serverIndex)
-    end, cardGrid)
+    local cardInfo = { server = server, recommended = recommended, index = serverIndex }
+    cardRects[#cardRects + 1] = { x = x, y = y, w = cell, h = cell, card = cardInfo }
+    bindCardInputs(card, cardInfo)
 end
 
 local function updateStatusLine1()
@@ -494,120 +494,40 @@ local function uiRefresh()
     end)
 end
 
--- ===== 二级确认弹窗 =====
-local function closeModal()
-    if modalRoot then
-        modalRoot.Visible = false
+-- ===== 卡片点击：直接加入（滚动区本体命中检测，兼容手机） =====
+local function startGridPress(input, cardInfo)
+    if not cardInfo then return end
+    gridPress = { input = input, time = os.clock(), moved = false, card = cardInfo }
+end
+
+local function finishGridPress(input)
+    if not gridPress or input ~= gridPress.input then return end
+    local p = gridPress
+    gridPress = nil
+    if p.card and not p.moved and (os.clock() - p.time) < 0.8 then
+        local srv = p.card.server
+        statusLabel.Text = "正在加入 服务器" .. p.card.index .. "（在线 " .. srv.playing .. "/" .. srv.maxPlayers .. "）..."
+        notify("正在加入", "在线 " .. srv.playing .. "/" .. srv.maxPlayers, "arrow-right", 3)
+        TeleportService:TeleportToPlaceInstance(PlaceId, srv.id)
     end
 end
 
-local function openJoinModal(server, recommended, index)
-    if not modalRoot then return end
-    pendingJoin = server
-    local pingText = type(server.ping) == "number" and (math.floor(server.ping) .. "ms") or "未知"
-    local regionText = server.region and tostring(server.region) or "未知"
-    local ratio = server.maxPlayers > 0 and (server.playing / server.maxPlayers) or 0
-    local recText = recommended and "\n<font color='#6c5ce7'>★ 推荐服务器</font>" or ""
-    modalDetail.Text = "<font color='#50b4ff'>服务器: " .. (index and ("服务器" .. index) or "?") .. "</font>"
-        .. "\n<font color='#9aa0b5'>ID: " .. tostring(server.id) .. "</font>"
-        .. "\n<font color='#55ff88'>人数: " .. server.playing .. " / " .. server.maxPlayers
-        .. "（" .. math.floor(ratio * 100) .. "%）</font>"
-        .. "\n<font color='#ffaa3c'>Ping: " .. pingText .. "</font>"
-        .. "\n<font color='#9aa0b5'>地区: " .. regionText .. "</font>"
-        .. recText
-    modalRoot.Visible = true
-end
-
-local function createModal(screenGui)
-    modalRoot = Instance.new("Frame")
-    modalRoot.Name = "JoinModal"
-    modalRoot.Size = UDim2.new(1, 0, 1, 0)
-    modalRoot.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-    modalRoot.BackgroundTransparency = 0.5
-    modalRoot.Visible = false
-    modalRoot.ZIndex = 10
-    modalRoot.Parent = screenGui
-
-    local dimBtn = Instance.new("TextButton")
-    dimBtn.Size = UDim2.new(1, 0, 1, 0)
-    dimBtn.BackgroundTransparency = 1
-    dimBtn.Text = ""
-    dimBtn.Parent = modalRoot
-    bindTap(dimBtn, closeModal)
-
-    local panel = Instance.new("Frame")
-    panel.Size = UDim2.new(0, 320, 0, 252)
-    panel.AnchorPoint = Vector2.new(0.5, 0.5)
-    panel.Position = UDim2.new(0.5, 0, 0.5, 0)
-    panel.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
-    panel.BorderSizePixel = 0
-    panel.Parent = modalRoot
-    Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 16)
-    local pStroke = Instance.new("UIStroke", panel)
-    pStroke.Color = Color3.fromRGB(108, 92, 231)
-    pStroke.Thickness = 1
-
-    local pTitle = Instance.new("TextLabel")
-    pTitle.Size = UDim2.new(1, 0, 0, 46)
-    pTitle.BackgroundTransparency = 1
-    pTitle.Text = "加入服务器？"
-    pTitle.TextColor3 = Color3.fromRGB(240, 240, 245)
-    pTitle.TextSize = 18
-    pTitle.Font = Enum.Font.GothamBold
-    pTitle.Parent = panel
-
-    modalDetail = Instance.new("TextLabel")
-    modalDetail.Size = UDim2.new(1, -40, 0, 130)
-    modalDetail.Position = UDim2.new(0, 20, 0, 48)
-    modalDetail.BackgroundTransparency = 1
-    modalDetail.RichText = true
-    modalDetail.Text = "请选择服务器"
-    modalDetail.TextColor3 = Color3.fromRGB(220, 220, 230)
-    modalDetail.TextSize = 14
-    modalDetail.Font = Enum.Font.Gotham
-    modalDetail.TextXAlignment = Enum.TextXAlignment.Left
-    modalDetail.TextYAlignment = Enum.TextYAlignment.Top
-    modalDetail.Parent = panel
-
-    local cancelBtn = Instance.new("TextButton")
-    cancelBtn.Size = UDim2.new(0, 110, 0, 38)
-    cancelBtn.Position = UDim2.new(0, 20, 1, -52)
-    cancelBtn.BackgroundColor3 = Color3.fromRGB(36, 36, 46)
-    cancelBtn.BorderSizePixel = 0
-    cancelBtn.Text = "取消"
-    cancelBtn.TextColor3 = Color3.fromRGB(200, 200, 210)
-    cancelBtn.TextSize = 14
-    cancelBtn.Font = Enum.Font.GothamBold
-    cancelBtn.Parent = panel
-    Instance.new("UICorner", cancelBtn).CornerRadius = UDim.new(0, 8)
-    bindTap(cancelBtn, closeModal)
-
-    local confirmBtn = Instance.new("TextButton")
-    confirmBtn.Size = UDim2.new(0, 130, 0, 38)
-    confirmBtn.Position = UDim2.new(1, -150, 1, -52)
-    confirmBtn.BackgroundColor3 = Color3.fromRGB(108, 92, 231)
-    confirmBtn.BorderSizePixel = 0
-    confirmBtn.Text = "确认加入"
-    confirmBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    confirmBtn.TextSize = 14
-    confirmBtn.Font = Enum.Font.GothamBold
-    confirmBtn.Parent = panel
-    Instance.new("UICorner", confirmBtn).CornerRadius = UDim.new(0, 8)
-    confirmBtn.MouseEnter:Connect(function()
-        TweenService:Create(confirmBtn, TweenInfo.new(0.15), { BackgroundColor3 = Color3.fromRGB(130, 110, 245) }):Play()
-    end)
-    confirmBtn.MouseLeave:Connect(function()
-        TweenService:Create(confirmBtn, TweenInfo.new(0.15), { BackgroundColor3 = Color3.fromRGB(108, 92, 231) }):Play()
-    end)
-    bindTap(confirmBtn, function()
-        local srv = pendingJoin
-        closeModal()
-        if srv then
-            statusLabel.Text = "正在加入 " .. tostring(srv.id) .. "（在线 " .. srv.playing .. "/" .. srv.maxPlayers .. "）..."
-            notify("正在加入", "在线 " .. srv.playing .. "/" .. srv.maxPlayers, "arrow-right", 3)
-            TeleportService:TeleportToPlaceInstance(PlaceId, srv.id)
+local function bindCardInputs(gui, cardInfo)
+    gui.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch
+            or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            startGridPress(input, cardInfo)
         end
     end)
+    gui.InputChanged:Connect(function(input)
+        if gridPress and input == gridPress.input then
+            local d = input.Delta
+            if d and (math.abs(d.X) > 25 or math.abs(d.Y) > 25) then
+                gridPress.moved = true
+            end
+        end
+    end)
+    gui.InputEnded:Connect(finishGridPress)
 end
 
 local function createServerUI()
@@ -742,6 +662,40 @@ local function createServerUI()
     cardGrid.ScrollingDirection = Enum.ScrollingDirection.Y
     cardGrid.Parent = root
 
+    -- 滚动区本体接收触摸：按下时按坐标命中卡片
+    cardGrid.InputBegan:Connect(function(input)
+        if input.UserInputType ~= Enum.UserInputType.Touch
+            and input.UserInputType ~= Enum.UserInputType.MouseButton1 then
+            return
+        end
+        local pos = input.Position
+        if typeof(pos) == "Vector3" then
+            pos = Vector2.new(pos.X, pos.Y)
+        end
+        local cx = pos.X - cardGrid.AbsolutePosition.X + cardGrid.CanvasPosition.X
+        local cy = pos.Y - cardGrid.AbsolutePosition.Y + cardGrid.CanvasPosition.Y
+        for _, r in ipairs(cardRects) do
+            if cx >= r.x and cx <= r.x + r.w and cy >= r.y and cy <= r.y + r.h then
+                startGridPress(input, r.card)
+                break
+            end
+        end
+    end)
+    cardGrid.InputChanged:Connect(function(input)
+        if gridPress and input == gridPress.input then
+            local d = input.Delta
+            if d and (math.abs(d.X) > 25 or math.abs(d.Y) > 25) then
+                gridPress.moved = true
+            end
+        end
+    end)
+    cardGrid.InputEnded:Connect(finishGridPress)
+    cardGrid.Scrolling:Connect(function()
+        if gridPress then
+            gridPress.moved = true
+        end
+    end)
+
     statusLabel = Instance.new("TextLabel")
     statusLabel.Size = UDim2.new(1, -24, 0, 40)
     statusLabel.Position = UDim2.new(0, 12, 1, -46)
@@ -754,7 +708,6 @@ local function createServerUI()
     statusLabel.Text = "等待刷新"
     statusLabel.Parent = root
 
-    createModal(ScreenGui)
     pcall(buildList)
 
     -- 3 秒自动刷新（窗口可见时）
@@ -800,9 +753,7 @@ end)
 UIS.InputBegan:Connect(function(input, processed)
     if processed then return end
     if input.KeyCode == Enum.KeyCode.Escape then
-        if modalRoot and modalRoot.Visible then
-            closeModal()
-        elseif ServerUI.Root then
+        if ServerUI.Root then
             ServerUI.Root.Visible = false
             showMainWindow()
         end
