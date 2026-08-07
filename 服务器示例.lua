@@ -236,15 +236,8 @@ local function computeCell()
 end
 
 -- 手动点击识别：按下后没滑动就抬起 = 一次点击（兼容手机执行器）
-local function bindTap(gui, callback, scrollFrame)
+local function bindTap(gui, callback)
     local press = nil
-    if scrollFrame then
-        scrollFrame.Scrolling:Connect(function()
-            if press then
-                press.moved = true
-            end
-        end)
-    end
     gui.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.Touch
             or input.UserInputType == Enum.UserInputType.MouseButton1 then
@@ -421,6 +414,7 @@ local function updateStatusLine1()
 end
 
 local function buildList()
+    if not statusLabel or not searchBox then return end
     clearRows()
     updateSortButtons()
 
@@ -698,7 +692,7 @@ local function createServerUI()
         end
     end)
     cardGrid.InputEnded:Connect(finishGridPress)
-    cardGrid.Scrolling:Connect(function()
+    cardGrid:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
         if gridPress then
             gridPress.moved = true
         end
@@ -733,6 +727,13 @@ local function openServerBrowser()
     hideMainWindow()
     local ok, err = pcall(createServerUI)
     if not ok then
+        pcall(function()
+            if ServerUI.ScreenGui then
+                ServerUI.ScreenGui:Destroy()
+            end
+            ServerUI.Root = nil
+            ServerUI.ScreenGui = nil
+        end)
         showMainWindow()
         warn("[服务器] 列表界面创建失败:", err)
         notify("服务器列表", "创建失败: " .. tostring(err), "alert-triangle", 5)
