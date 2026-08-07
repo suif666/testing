@@ -420,12 +420,48 @@ local function createServerCard(server, recommended, index, x, y, cell, full)
     regionLabel.Size = UDim2.new(1, 0, 0, 16)
     regionLabel.Position = UDim2.new(0, 0, 1, -16)
     regionLabel.BackgroundTransparency = 1
-    regionLabel.Text = full and "已满" or (server.region and tostring(server.region) or "点击加入")
+    regionLabel.Text = full and "已满" or (server.region and tostring(server.region) or "")
     regionLabel.TextColor3 = full and Color3.fromRGB(240, 110, 110) or Color3.fromRGB(130, 130, 145)
     regionLabel.TextSize = 11
     regionLabel.Font = Enum.Font.Gotham
     regionLabel.TextXAlignment = Enum.TextXAlignment.Center
     regionLabel.Parent = card
+
+    -- 根据卡片大小自适应排版，避免文字溢出到相邻卡片
+    if cell >= 90 then
+        idLabel.Size = UDim2.new(1, 0, 0, 18)
+        idLabel.Position = UDim2.new(0, 0, 0, 0)
+        idLabel.TextSize = 13
+        countLabel.Size = UDim2.new(1, 0, 0, 34)
+        countLabel.Position = UDim2.new(0, 0, 0, 18)
+        countLabel.TextSize = 20
+        pingLabel.Size = UDim2.new(1, 0, 0, 18)
+        pingLabel.Position = UDim2.new(0, 0, 0, 52)
+        pingLabel.TextSize = 13
+        regionLabel.Visible = true
+    elseif cell >= 70 then
+        idLabel.Size = UDim2.new(1, 0, 0, 16)
+        idLabel.Position = UDim2.new(0, 0, 0, 2)
+        idLabel.TextSize = 12
+        countLabel.Size = UDim2.new(1, 0, 0, 24)
+        countLabel.Position = UDim2.new(0, 0, 0, 18)
+        countLabel.TextSize = 16
+        pingLabel.Size = UDim2.new(1, 0, 0, 16)
+        pingLabel.Position = UDim2.new(0, 0, 0, 42)
+        pingLabel.TextSize = 11
+        regionLabel.Visible = false
+    else
+        idLabel.Size = UDim2.new(1, 0, 0, 14)
+        idLabel.Position = UDim2.new(0, 0, 0, 1)
+        idLabel.TextSize = 11
+        countLabel.Size = UDim2.new(1, 0, 0, 20)
+        countLabel.Position = UDim2.new(0, 0, 0, 15)
+        countLabel.TextSize = 14
+        pingLabel.Size = UDim2.new(1, 0, 0, 14)
+        pingLabel.Position = UDim2.new(0, 0, 0, 35)
+        pingLabel.TextSize = 10
+        regionLabel.Visible = false
+    end
 
     local function press(active)
         card.BackgroundColor3 = active
@@ -533,8 +569,10 @@ local function buildList()
     end
 
     local viewport = (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize) or Vector2.new(1280, 720)
-    local gridW = viewport.X - 72
-    local gridH = viewport.Y - 196
+    local gridW = cardGrid.AbsoluteSize.X
+    local gridH = cardGrid.AbsoluteSize.Y
+    if gridW <= 0 then gridW = viewport.X - 72 end
+    if gridH <= 0 then gridH = viewport.Y - 196 end
     local gap = 10
     local minCell = 56
 
