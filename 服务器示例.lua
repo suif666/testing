@@ -188,7 +188,6 @@ end
 -- ===== 自定义服务器列表界面（全屏网格版） =====
 local refreshing = false
 local cardGrid = nil
-local gridLayout = nil
 local modalRoot = nil
 local modalDetail = nil
 local pendingJoin = nil
@@ -232,7 +231,42 @@ local function computeCell()
     local sidePad = 24
     local cols = viewport.X > 900 and 5 or (viewport.X > 600 and 4 or 3)
     local cell = math.clamp((viewport.X - sidePad * 2 - gap * (cols - 1)) / cols, 90, 170)
-    return cell, gap
+    return cell, gap, cols
+end
+
+-- 手动点击识别：按下后没滑动就抬起 = 一次点击（兼容手机执行器）
+local function bindTap(gui, callback, scrollFrame)
+    local press = nil
+    if scrollFrame then
+        scrollFrame.Scrolling:Connect(function()
+            if press then
+                press.moved = true
+            end
+        end)
+    end
+    gui.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch
+            or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            press = { input = input, time = os.clock(), moved = false }
+        end
+    end)
+    gui.InputChanged:Connect(function(input)
+        if press and input == press.input then
+            local d = input.Delta
+            if d and (math.abs(d.X) > 25 or math.abs(d.Y) > 25) then
+                press.moved = true
+            end
+        end
+    end)
+    gui.InputEnded:Connect(function(input)
+        if press and input == press.input then
+            local p = press
+            press = nil
+            if not p.moved and (os.clock() - p.time) < 0.8 then
+                callback()
+            end
+        end
+    end)
 end
 
 local function getGameName()
@@ -281,13 +315,13 @@ local function updateSortButtons()
     sortLeastBtn.BackgroundColor3 = SortMode == "人数最少" and activeC or idleC
 end
 
--- 卡片本身就是一个按钮，手机端也能点
-local function createServerCard(server, recommended)
+local function createServerCard(server, recommended, x, y, cell)
     serverIndex = serverIndex + 1
 
     local card = Instance.new("TextButton")
     card.Name = "ServerCard"
-    card.Size = UDim2.new(1, 0, 1, 0)
+    card.Size = UDim2.fromOffset(cell, cell)
+    card.Position = UDim2.fromOffset(x, y)
     card.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
     card.BorderSizePixel = 0
     card.AutoButtonColor = false
@@ -370,9 +404,9 @@ local function createServerCard(server, recommended)
             press(false)
         end
     end)
-    card.Activated:Connect(function()
+    bindTap(card, function()
         openJoinModal(server, recommended, serverIndex)
-    end)
+    end, cardGrid)
 end
 
 local function updateStatusLine1()
@@ -387,11 +421,6 @@ end
 
 local function buildList()
     clearRows()
-    local cell, gap = computeCell()
-    if gridLayout then
-        gridLayout.CellSize = UDim2.fromOffset(cell, cell)
-        gridLayout.CellPadding = UDim2.fromOffset(gap, gap)
-    end
     updateSortButtons()
 
     serverIndex = 0
@@ -404,14 +433,22 @@ local function buildList()
             recommended = s
         end
     end
+
+    local cell, gap, cols = computeCell()
     for _, s in ipairs(browserServers) do
         local id = tostring(s.id):lower()
         if query == "" or id:find(query, 1, true) then
-            pcall(createServerCard, s, #browserServers > 1 and s == recommended)
+            local col = shown % cols
+            local row = math.floor(shown / cols)
+            pcall(createServerCard, s, #browserServers > 1 and s == recommended,
+                12 + col * (cell + gap), 12 + row * (cell + gap), cell)
             shown = shown + 1
             if shown >= 300 then break end
         end
     end
+
+    local rows = math.ceil(shown / cols)
+    cardGrid.CanvasSize = UDim2.new(0, 0, 0, 12 + rows * (cell + gap) + 12)
 
     local line1 = currentLine()
     if #browserServers == 0 then
@@ -496,7 +533,7 @@ local function createModal(screenGui)
     dimBtn.BackgroundTransparency = 1
     dimBtn.Text = ""
     dimBtn.Parent = modalRoot
-    dimBtn.Activated:Connect(closeModal)
+    bindTap(dimBtn, closeModal)
 
     local panel = Instance.new("Frame")
     panel.Size = UDim2.new(0, 320, 0, 252)
@@ -543,7 +580,7 @@ local function createModal(screenGui)
     cancelBtn.Font = Enum.Font.GothamBold
     cancelBtn.Parent = panel
     Instance.new("UICorner", cancelBtn).CornerRadius = UDim.new(0, 8)
-    cancelBtn.Activated:Connect(closeModal)
+    bindTap(cancelBtn, closeModal)
 
     local confirmBtn = Instance.new("TextButton")
     confirmBtn.Size = UDim2.new(0, 130, 0, 38)
@@ -562,7 +599,7 @@ local function createModal(screenGui)
     confirmBtn.MouseLeave:Connect(function()
         TweenService:Create(confirmBtn, TweenInfo.new(0.15), { BackgroundColor3 = Color3.fromRGB(108, 92, 231) }):Play()
     end)
-    confirmBtn.Activated:Connect(function()
+    bindTap(confirmBtn, function()
         local srv = pendingJoin
         closeModal()
         if srv then
@@ -661,7 +698,7 @@ local function createServerUI()
     closeBtn.MouseLeave:Connect(function()
         TweenService:Create(closeBtn, TweenInfo.new(0.15), { BackgroundColor3 = Color3.fromRGB(30, 30, 38) }):Play()
     end)
-    closeBtn.Activated:Connect(function()
+    bindTap(closeBtn, function()
         if ServerUI.Root then
             ServerUI.Root.Visible = false
         end
@@ -684,7 +721,7 @@ local function createServerUI()
         btn.Font = Enum.Font.GothamBold
         btn.Parent = root
         Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
-        btn.Activated:Connect(function()
+        bindTap(btn, function()
             SortMode = mode
             buildList()
         end)
@@ -702,13 +739,8 @@ local function createServerUI()
     cardGrid.BorderSizePixel = 0
     cardGrid.ScrollBarThickness = 4
     cardGrid.ScrollBarImageColor3 = Color3.fromRGB(80, 80, 100)
-    cardGrid.AutomaticCanvasSize = Enum.AutomaticSize.Y
     cardGrid.ScrollingDirection = Enum.ScrollingDirection.Y
     cardGrid.Parent = root
-    gridLayout = Instance.new("UIGridLayout", cardGrid)
-    gridLayout.SortOrder = Enum.SortOrder.LayoutOrder
-    gridLayout.FillDirection = Enum.FillDirection.Horizontal
-    gridLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 
     statusLabel = Instance.new("TextLabel")
     statusLabel.Size = UDim2.new(1, -24, 0, 40)
