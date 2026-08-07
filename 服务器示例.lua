@@ -166,8 +166,8 @@ local function fetchAllServers()
 
         local data = HttpService:JSONDecode(game:HttpGet(url))
         for _, s in ipairs(data.data or {}) do
-            -- 过滤掉当前服务器和已满的服务器
-            if s.id and s.id ~= CurrentJob and s.playing < s.maxPlayers then
+            -- 浏览器模式：只排除当前服务器，已满的也显示（排最后，标已满）
+            if s.id and s.id ~= CurrentJob then
                 table.insert(all, s)
             end
         end
@@ -199,10 +199,12 @@ local bindCardInputs = nil -- 前向声明：createServerCard 会调用它
 local uiTitleLabel = nil
 local pageIndex = 1
 local currentPageCount = 1
+local PageSize = 24
 local pageButtons = {}
 local pageColumn = nil
-local pagePrevBtn = nil
-local pageNextBtn = nil
+local size12Btn = nil
+local size24Btn = nil
+local size36Btn = nil
 local TweenService = game:GetService("TweenService")
 
 -- 打开列表时隐藏 WindUI 主窗口，防止透明窗口挡掉触摸；关闭时恢复
@@ -229,15 +231,6 @@ local function clearRows()
             child:Destroy()
         end
     end
-end
-
--- 根据屏幕宽度算方形卡片尺寸（手机 3 列 / 平板 4 列 / 电脑 5 列）
-local function computeCell(availW)
-    availW = availW or 500
-    local gap = 10
-    local cols = availW > 700 and 5 or (availW > 460 and 4 or 3)
-    local cell = math.clamp((availW - gap * (cols - 1)) / cols, 80, 165)
-    return cell, gap, cols
 end
 
 -- 手动点击识别：按下后没滑动就抬起 = 一次点击（兼容手机执行器）
@@ -300,17 +293,26 @@ local function sortServers(list)
         useMost = true
     end
     table.sort(list, function(a, b)
-        if usePing then
-            local pa = type(a.ping) == "number" and a.ping or math.huge
-            local pb = type(b.ping) == "number" and b.ping or math.huge
-            if pa ~= pb then
+        local pa = type(a.ping) == "number" and a.ping or math.huge
+        local pb = type(b.ping) == "number" and b.ping or math.huge
+        if useMost then
+            if a.playing ~= b.playing then
+                return a.playing > b.playing
+            end
+            if usePing and pa ~= pb then
                 return pa < pb
             end
-        end
-        if useMost then
-            return a.playing > b.playing
+            return false
         elseif useLeast then
-            return a.playing < b.playing
+            if a.playing ~= b.playing then
+                return a.playing < b.playing
+            end
+            if usePing and pa ~= pb then
+                return pa < pb
+            end
+            return false
+        elseif usePing then
+            return pa < pb
         end
         return false
     end)
@@ -325,7 +327,16 @@ local function updateSortButtons()
     sortLeastBtn.BackgroundColor3 = Filter.Least and activeC or idleC
 end
 
-local function createServerCard(server, recommended, index, x, y, cell)
+local function updateSizeButtons()
+    if not size12Btn then return end
+    local activeC = Color3.fromRGB(108, 92, 231)
+    local idleC = Color3.fromRGB(30, 30, 38)
+    size12Btn.BackgroundColor3 = PageSize == 12 and activeC or idleC
+    size24Btn.BackgroundColor3 = PageSize == 24 and activeC or idleC
+    size36Btn.BackgroundColor3 = PageSize == 36 and activeC or idleC
+end
+
+local function createServerCard(server, recommended, index, x, y, cell, full)
     local card = Instance.new("TextButton")
     card.Name = "ServerCard"
     card.Size = UDim2.fromOffset(cell, cell)
@@ -337,7 +348,9 @@ local function createServerCard(server, recommended, index, x, y, cell)
     card.Parent = cardGrid
     Instance.new("UICorner", card).CornerRadius = UDim.new(0, 12)
     local stroke = Instance.new("UIStroke", card)
-    stroke.Color = recommended and Color3.fromRGB(108, 92, 231) or Color3.fromRGB(40, 40, 50)
+    stroke.Color = full
+        and Color3.fromRGB(220, 70, 70)
+        or (recommended and Color3.fromRGB(108, 92, 231) or Color3.fromRGB(40, 40, 50))
     stroke.Thickness = 1
 
     local pad = Instance.new("UIPadding", card)
@@ -388,8 +401,8 @@ local function createServerCard(server, recommended, index, x, y, cell)
     regionLabel.Size = UDim2.new(1, 0, 0, 16)
     regionLabel.Position = UDim2.new(0, 0, 1, -16)
     regionLabel.BackgroundTransparency = 1
-    regionLabel.Text = server.region and tostring(server.region) or "点击加入"
-    regionLabel.TextColor3 = Color3.fromRGB(130, 130, 145)
+    regionLabel.Text = full and "已满" or (server.region and tostring(server.region) or "点击加入")
+    regionLabel.TextColor3 = full and Color3.fromRGB(240, 110, 110) or Color3.fromRGB(130, 130, 145)
     regionLabel.TextSize = 11
     regionLabel.Font = Enum.Font.Gotham
     regionLabel.TextXAlignment = Enum.TextXAlignment.Center
@@ -412,7 +425,7 @@ local function createServerCard(server, recommended, index, x, y, cell)
             press(false)
         end
     end)
-    local cardInfo = { server = server, recommended = recommended, index = index }
+    local cardInfo = { server = server, recommended = recommended, index = index, full = full }
     cardRects[#cardRects + 1] = { x = x, y = y, w = cell, h = cell, card = cardInfo }
     bindCardInputs(card, cardInfo)
 end
@@ -427,46 +440,38 @@ local function updateStatusLine1()
     statusLabel.Text = currentLine() .. "\n" .. line2
 end
 
--- 右侧页数按钮（只显示当前页附近的页码，前后用 ‹ › 翻）
+-- 右侧页码（纯数字，页数多时可上下拖动）
+local PAGE_PITCH = 33
 local function updatePageButtons(pageCount)
     if not pageColumn then return end
     currentPageCount = pageCount
 
     local viewport = (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize) or Vector2.new(1280, 720)
-    local winSize = math.clamp(math.floor((viewport.Y - 196 - 70) / 33), 3, 11)
-    local startP = math.max(1, pageIndex - 5)
-    local endP = math.min(pageCount, startP + winSize - 1)
-    startP = math.max(1, endP - winSize + 1)
+    pageColumn.CanvasSize = UDim2.new(0, 0, 0, math.max(viewport.Y - 196, pageCount * PAGE_PITCH))
 
     for i = 1, pageCount do
-        local visible = i >= startP and i <= endP
-        local btn = pageButtons[i]
-        if visible then
-            if not btn then
-                btn = Instance.new("TextButton")
-                btn.LayoutOrder = 2
-                btn.Size = UDim2.new(0, 34, 0, 28)
-                btn.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
-                btn.BorderSizePixel = 0
-                btn.TextColor3 = Color3.fromRGB(220, 220, 230)
-                btn.TextSize = 12
-                btn.Font = Enum.Font.GothamBold
-                btn.Parent = pageColumn
-                Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 7)
-                local idx = i
-                bindTap(btn, function()
-                    pageIndex = idx
-                    buildList()
-                end)
-                pageButtons[i] = btn
-            end
-            btn.Visible = true
-            btn.Text = tostring(i)
-            btn.BackgroundColor3 = (i == pageIndex)
-                and Color3.fromRGB(108, 92, 231)
-                or Color3.fromRGB(30, 30, 38)
-        elseif btn then
-            btn.Visible = false
+        local lbl = pageButtons[i]
+        if not lbl then
+            lbl = Instance.new("TextLabel")
+            lbl.Size = UDim2.new(0, 34, 0, 28)
+            lbl.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
+            lbl.BorderSizePixel = 0
+            lbl.TextColor3 = Color3.fromRGB(220, 220, 230)
+            lbl.TextSize = 12
+            lbl.Font = Enum.Font.GothamBold
+            lbl.Parent = pageColumn
+            Instance.new("UICorner", lbl).CornerRadius = UDim.new(0, 7)
+            pageButtons[i] = lbl
+        end
+        lbl.Visible = true
+        lbl.Text = tostring(i)
+        lbl.BackgroundColor3 = (i == pageIndex)
+            and Color3.fromRGB(108, 92, 231)
+            or Color3.fromRGB(30, 30, 38)
+    end
+    for i = pageCount + 1, #pageButtons do
+        if pageButtons[i] then
+            pageButtons[i].Visible = false
         end
     end
 end
@@ -475,6 +480,7 @@ local function buildList()
     if not statusLabel or not searchBox then return end
     clearRows()
     updateSortButtons()
+    updateSizeButtons()
 
     sortServers(browserServers)
     local query = searchBox.Text:lower()
@@ -486,11 +492,21 @@ local function buildList()
     end
 
     local filtered = {}
+    local fullList = {}
+    local fullCount = 0
     for _, s in ipairs(browserServers) do
         local id = tostring(s.id):lower()
         if query == "" or id:find(query, 1, true) then
-            table.insert(filtered, s)
+            if s.playing >= s.maxPlayers then
+                fullCount = fullCount + 1
+                table.insert(fullList, s)
+            else
+                table.insert(filtered, s)
+            end
         end
+    end
+    for _, s in ipairs(fullList) do
+        table.insert(filtered, s)
     end
 
     if uiTitleLabel then
@@ -500,9 +516,19 @@ local function buildList()
     local viewport = (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize) or Vector2.new(1280, 720)
     local gridW = viewport.X - 72
     local gridH = viewport.Y - 196
-    local cell, gap, cols = computeCell(gridW)
-    local rows = math.max(1, math.floor((gridH - 12) / (cell + gap)))
-    local cap = cols * rows
+    local gap = 10
+    local cols = gridW > 700 and 5 or (gridW > 460 and 4 or 3)
+    local minCell = 56
+    local rows = math.max(1, math.ceil(PageSize / cols))
+    local cellW = (gridW - gap * (cols - 1)) / cols
+    local cellH = (gridH - 12) / rows - gap
+    local cell = math.clamp(math.min(cellW, cellH), minCell, 165)
+    local maxRows = math.floor((gridH - 12) / (minCell + gap))
+    if rows > maxRows then
+        rows = math.max(1, maxRows)
+        cell = math.min(cellW, (gridH - 12) / rows - gap)
+    end
+    local cap = math.min(PageSize, rows * cols)
     local pageCount = math.max(1, math.ceil(#filtered / cap))
     if pageIndex > pageCount then
         pageIndex = pageCount
@@ -518,7 +544,7 @@ local function buildList()
         local col = (idxInPage - 1) % cols
         local row = math.floor((idxInPage - 1) / cols)
         local okc, errc = pcall(createServerCard, s, #filtered > 1 and s == recommended, i,
-            12 + col * (cell + gap), 12 + row * (cell + gap), cell)
+            12 + col * (cell + gap), 12 + row * (cell + gap), cell, s.playing >= s.maxPlayers)
         if not okc and not cardErr then
             cardErr = tostring(errc)
         end
@@ -535,7 +561,9 @@ local function buildList()
     else
         local suffix = ""
         if searchBox.Text ~= "" then suffix = "（筛选结果）" end
-        statusLabel.Text = line1 .. "\n共 " .. #filtered .. " 个服务器 · 第 " .. pageIndex .. "/" .. pageCount .. " 页" .. suffix
+        local fullText = fullCount > 0 and ("（含已满 " .. fullCount .. " 个）") or ""
+        statusLabel.Text = line1 .. "\n共 " .. #filtered .. " 个服务器" .. fullText
+            .. " · 第 " .. pageIndex .. "/" .. pageCount .. " 页" .. suffix
             .. " · " .. os.date("%H:%M:%S") .. " · 3秒自动刷新"
     end
 end
@@ -583,6 +611,11 @@ local function finishGridPress(input)
     gridPress = nil
     if p.card and not p.moved and (os.clock() - p.time) < 0.8 then
         local srv = p.card.server
+        if p.card.full then
+            statusLabel.Text = "服务器" .. p.card.index .. " 已满，无法加入"
+            notify("无法加入", "该服务器已满", "alert-triangle", 3)
+            return
+        end
         statusLabel.Text = "正在加入 服务器" .. p.card.index .. "（在线 " .. srv.playing .. "/" .. srv.maxPlayers .. "）..."
         notify("正在加入", "在线 " .. srv.playing .. "/" .. srv.maxPlayers, "arrow-right", 3)
         TeleportService:TeleportToPlaceInstance(PlaceId, srv.id)
@@ -702,19 +735,27 @@ local function createServerUI()
         showMainWindow()
     end)
 
-    -- 排序按钮组
+    -- 筛选按钮组（左）+ 每页数量（右）
     local uiViewport = (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize) or Vector2.new(1280, 720)
-    local gap = 8
-    local btnW = (uiViewport.X - 24 - gap * 2) / 3
-    local function makeSortBtn(text, mode, x)
+    local availW = uiViewport.X - 24
+    local filterW = math.floor(availW * 0.55)
+    local sizeGroupW = availW - filterW - 8
+    local filterGap = 6
+    local sizeGap = 4
+    local filterBtnW = math.floor((filterW - filterGap * 2) / 3)
+    local sizeBtnW = math.floor((sizeGroupW - 34 - sizeGap * 2) / 3)
+    local sizeLabelX = 12 + filterW + 8
+    local sizeBtnX = sizeLabelX + 34
+
+    local function makeSortBtn(text, mode, x, w)
         local btn = Instance.new("TextButton")
-        btn.Size = UDim2.new(0, btnW, 0, 34)
+        btn.Size = UDim2.new(0, w, 0, 34)
         btn.Position = UDim2.new(0, x, 0, 54)
         btn.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
         btn.BorderSizePixel = 0
         btn.Text = text
         btn.TextColor3 = Color3.fromRGB(220, 220, 230)
-        btn.TextSize = 13
+        btn.TextSize = 12
         btn.Font = Enum.Font.GothamBold
         btn.Parent = root
         Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
@@ -732,9 +773,42 @@ local function createServerUI()
         end)
         return btn
     end
-    sortPingBtn = makeSortBtn("Ping最低", "ping", 12)
-    sortMostBtn = makeSortBtn("人数最多", "most", 12 + btnW + gap)
-    sortLeastBtn = makeSortBtn("人数最少", "least", 12 + (btnW + gap) * 2)
+    sortPingBtn = makeSortBtn("Ping最低", "ping", 12, filterBtnW)
+    sortMostBtn = makeSortBtn("人数最多", "most", 12 + filterBtnW + filterGap, filterBtnW)
+    sortLeastBtn = makeSortBtn("人数最少", "least", 12 + (filterBtnW + filterGap) * 2, filterBtnW)
+
+    local sizeLabel = Instance.new("TextLabel")
+    sizeLabel.Size = UDim2.new(0, 34, 0, 34)
+    sizeLabel.Position = UDim2.new(0, sizeLabelX, 0, 54)
+    sizeLabel.BackgroundTransparency = 1
+    sizeLabel.Text = "每页"
+    sizeLabel.TextColor3 = Color3.fromRGB(140, 140, 155)
+    sizeLabel.TextSize = 12
+    sizeLabel.Font = Enum.Font.Gotham
+    sizeLabel.TextXAlignment = Enum.TextXAlignment.Center
+    sizeLabel.Parent = root
+
+    local function makeSizeBtn(text, value, x, w)
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(0, w, 0, 34)
+        btn.Position = UDim2.new(0, x, 0, 54)
+        btn.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
+        btn.BorderSizePixel = 0
+        btn.Text = text
+        btn.TextColor3 = Color3.fromRGB(220, 220, 230)
+        btn.TextSize = 12
+        btn.Font = Enum.Font.GothamBold
+        btn.Parent = root
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+        bindTap(btn, function()
+            PageSize = value
+            buildList()
+        end)
+        return btn
+    end
+    size12Btn = makeSizeBtn("12", 12, sizeBtnX, sizeBtnW)
+    size24Btn = makeSizeBtn("24", 24, sizeBtnX + sizeBtnW + sizeGap, sizeBtnW)
+    size36Btn = makeSizeBtn("36", 36, sizeBtnX + (sizeBtnW + sizeGap) * 2, sizeBtnW)
 
     -- 多列网格
     cardGrid = Instance.new("ScrollingFrame")
@@ -782,52 +856,59 @@ local function createServerUI()
         end
     end)
 
-    -- 右侧页数栏
-    pageColumn = Instance.new("Frame")
+    -- 右侧页数栏（可上下拖动，点击数字翻页）
+    pageColumn = Instance.new("ScrollingFrame")
     pageColumn.Name = "PageColumn"
     pageColumn.Size = UDim2.new(0, 40, 1, -196)
     pageColumn.Position = UDim2.new(1, -54, 0, 134)
     pageColumn.BackgroundTransparency = 1
     pageColumn.BorderSizePixel = 0
+    pageColumn.ScrollBarThickness = 4
+    pageColumn.ScrollBarImageColor3 = Color3.fromRGB(80, 80, 100)
+    pageColumn.ScrollingDirection = Enum.ScrollingDirection.Y
     pageColumn.Parent = root
     local pageLayout = Instance.new("UIListLayout", pageColumn)
-    pageLayout.SortOrder = Enum.SortOrder.LayoutOrder
     pageLayout.Padding = UDim.new(0, 5)
     pageLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 
-    pagePrevBtn = Instance.new("TextButton")
-    pagePrevBtn.LayoutOrder = 1
-    pagePrevBtn.Size = UDim2.new(0, 34, 0, 28)
-    pagePrevBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
-    pagePrevBtn.BorderSizePixel = 0
-    pagePrevBtn.Text = "<"
-    pagePrevBtn.TextColor3 = Color3.fromRGB(200, 200, 210)
-    pagePrevBtn.TextSize = 15
-    pagePrevBtn.Font = Enum.Font.GothamBold
-    pagePrevBtn.Parent = pageColumn
-    Instance.new("UICorner", pagePrevBtn).CornerRadius = UDim.new(0, 7)
-    bindTap(pagePrevBtn, function()
-        if pageIndex > 1 then
-            pageIndex = pageIndex - 1
-            buildList()
+    -- 点页码：按触摸坐标命中第几个数字（不依赖子按钮接收触摸）
+    local pagePress = nil
+    pageColumn.InputBegan:Connect(function(input)
+        if input.UserInputType ~= Enum.UserInputType.Touch
+            and input.UserInputType ~= Enum.UserInputType.MouseButton1 then
+            return
+        end
+        local pos = input.Position
+        if typeof(pos) == "Vector3" then
+            pos = Vector2.new(pos.X, pos.Y)
+        end
+        local cy = pos.Y - pageColumn.AbsolutePosition.Y + pageColumn.CanvasPosition.Y
+        local pg = math.floor(cy / PAGE_PITCH) + 1
+        if pg >= 1 and pg <= currentPageCount then
+            pagePress = { input = input, time = os.clock(), moved = false, page = pg }
         end
     end)
-
-    pageNextBtn = Instance.new("TextButton")
-    pageNextBtn.LayoutOrder = 3
-    pageNextBtn.Size = UDim2.new(0, 34, 0, 28)
-    pageNextBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
-    pageNextBtn.BorderSizePixel = 0
-    pageNextBtn.Text = ">"
-    pageNextBtn.TextColor3 = Color3.fromRGB(200, 200, 210)
-    pageNextBtn.TextSize = 15
-    pageNextBtn.Font = Enum.Font.GothamBold
-    pageNextBtn.Parent = pageColumn
-    Instance.new("UICorner", pageNextBtn).CornerRadius = UDim.new(0, 7)
-    bindTap(pageNextBtn, function()
-        if pageIndex < currentPageCount then
-            pageIndex = pageIndex + 1
-            buildList()
+    pageColumn.InputChanged:Connect(function(input)
+        if pagePress and input == pagePress.input then
+            local d = input.Delta
+            if d and (math.abs(d.X) > 25 or math.abs(d.Y) > 25) then
+                pagePress.moved = true
+            end
+        end
+    end)
+    pageColumn.InputEnded:Connect(function(input)
+        if pagePress and input == pagePress.input then
+            local p = pagePress
+            pagePress = nil
+            if not p.moved and (os.clock() - p.time) < 0.8 then
+                pageIndex = p.page
+                buildList()
+            end
+        end
+    end)
+    pageColumn:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
+        if pagePress then
+            pagePress.moved = true
         end
     end)
 
