@@ -1,50 +1,15 @@
--- 服务器类 独立测试脚本
--- 用法：复制进注入器执行（不需要主脚本）
--- 功能：自动换服 / 人数最多服务器 / 人数最少服务器 / 随机服务器 / 管理员监测
--- 测试没问题后，再做成远程脚本格式
-
-local WindUI = _G.WindUI
-if not WindUI then
-    local ok, res = pcall(function()
-        if not loadstring then
-            error("当前环境没有 loadstring（可能不是注入器而是 Studio），无法加载 WindUI")
-        end
-        local source = game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua")
-        local fn, compileErr = loadstring(source)
-        if not fn then
-            error(compileErr)
-        end
-        return fn()
-    end)
-
-    if not ok or not res then
-        warn("WindUI 加载失败，脚本已停止:", res)
-        return
-    end
-    WindUI = res
-    _G.WindUI = WindUI
+-- 服务器类 远程脚本（依赖主脚本提供 ServerTab 和 getgenv().WindUI）
+if getgenv().__SUTURE_SERVER_LOADED then
+    return
 end
+getgenv().__SUTURE_SERVER_LOADED = true
 
-local win = WindUI:CreateWindow({
-    Title = "服务器测试",
-    Icon = "aperture",
-    Author = "suif",
-    Folder = "ServerTest",
-    Size = UDim2.fromOffset(620, 460),
-    MinSize = Vector2.new(560, 350),
-    MaxSize = Vector2.new(900, 600),
-    Resizable = true,
-    Transparent = true,
-    Theme = "Dark",
-    SideBarWidth = 180,
-    HideSearchBar = false,
-    ScrollBarEnabled = true,
-    NewElements = true,
-})
-
-local srvSection = win:Section({ Title = "服务器类", Icon = "folder", Locked = false })
-local Tab = srvSection:Tab({ Title = "服务器", Icon = "user", Locked = false })
-Tab:Select()
+local WindUI = getgenv().WindUI
+local Tab = (getgenv().Tabs and getgenv().Tabs.ServerTab) or getgenv().SutureServerTab
+if not Tab or not WindUI then
+    warn("[服务器] 未找到 ServerTab / WindUI，请检查主脚本是否正确赋值")
+    return
+end
 
 local Players = game:GetService("Players")
 local TeleportService = game:GetService("TeleportService")
@@ -53,7 +18,7 @@ local PlaceId = game.PlaceId
 local CurrentJob = game.JobId
 
 -- ===== 配置 =====
-local ServerConfig = {
+local defaultServerConfig = {
     Mode = "随机",
     AutoEnabled = false,
     AutoInterval = 60,
@@ -61,6 +26,13 @@ local ServerConfig = {
     AdminInterval = 10,
     KeywordCheck = false,
 }
+getgenv().SutureServerConfig = getgenv().SutureServerConfig or {}
+for k, v in pairs(defaultServerConfig) do
+    if getgenv().SutureServerConfig[k] == nil then
+        getgenv().SutureServerConfig[k] = v
+    end
+end
+local ServerConfig = getgenv().SutureServerConfig
 
 local statusText
 local adminListText
@@ -210,16 +182,18 @@ local TweenService = game:GetService("TweenService")
 -- 打开列表时隐藏 WindUI 主窗口，防止透明窗口挡掉触摸；关闭时恢复
 local function hideMainWindow()
     pcall(function()
-        if win and win.UIElements and win.UIElements.Main then
-            win.UIElements.Main.Visible = false
+        local w = getgenv().SutureMainWindow
+        if w and w.UIElements and w.UIElements.Main then
+            w.UIElements.Main.Visible = false
         end
     end)
 end
 
 local function showMainWindow()
     pcall(function()
-        if win and win.UIElements and win.UIElements.Main then
-            win.UIElements.Main.Visible = true
+        local w = getgenv().SutureMainWindow
+        if w and w.UIElements and w.UIElements.Main then
+            w.UIElements.Main.Visible = true
         end
     end)
 end
@@ -404,11 +378,12 @@ local function createServerCard(server, recommended, index, x, y, cell, full)
     countLabel.Parent = card
 
     -- Ping（橙色）
+    local pingText = type(server.ping) == "number" and (math.floor(server.ping) .. "ms") or "--"
     local pingLabel = Instance.new("TextLabel")
     pingLabel.Size = UDim2.new(1, 0, 0, 18)
     pingLabel.Position = UDim2.new(0, 0, 0, 52)
     pingLabel.BackgroundTransparency = 1
-    pingLabel.Text = type(server.ping) == "number" and (math.floor(server.ping) .. "ms") or "--"
+    pingLabel.Text = pingText
     pingLabel.TextColor3 = Color3.fromRGB(255, 170, 60)
     pingLabel.TextSize = 13
     pingLabel.Font = Enum.Font.GothamBold
@@ -438,6 +413,7 @@ local function createServerCard(server, recommended, index, x, y, cell, full)
         pingLabel.Size = UDim2.new(1, 0, 0, 18)
         pingLabel.Position = UDim2.new(0, 0, 0, 52)
         pingLabel.TextSize = 13
+        pingLabel.Text = "参考 " .. pingText
         regionLabel.Visible = true
     elseif cell >= 70 then
         idLabel.Size = UDim2.new(1, 0, 0, 16)
@@ -449,6 +425,7 @@ local function createServerCard(server, recommended, index, x, y, cell, full)
         pingLabel.Size = UDim2.new(1, 0, 0, 16)
         pingLabel.Position = UDim2.new(0, 0, 0, 42)
         pingLabel.TextSize = 11
+        pingLabel.Text = "参考" .. pingText
         regionLabel.Visible = false
     else
         idLabel.Size = UDim2.new(1, 0, 0, 14)
@@ -460,6 +437,7 @@ local function createServerCard(server, recommended, index, x, y, cell, full)
         pingLabel.Size = UDim2.new(1, 0, 0, 14)
         pingLabel.Position = UDim2.new(0, 0, 0, 35)
         pingLabel.TextSize = 10
+        pingLabel.Text = "~" .. pingText
         regionLabel.Visible = false
     end
 
@@ -850,7 +828,7 @@ local function createServerUI()
         end)
         return btn
     end
-    sortPingBtn = makeSortBtn("Ping最低", "ping", 12, filterBtnW)
+    sortPingBtn = makeSortBtn("参考Ping低", "ping", 12, filterBtnW)
     sortMostBtn = makeSortBtn("人数最多", "most", 12 + filterBtnW + filterGap, filterBtnW)
     sortLeastBtn = makeSortBtn("人数最少", "least", 12 + (filterBtnW + filterGap) * 2, filterBtnW)
 
@@ -1318,6 +1296,6 @@ end)
 if not uiOk then
     warn("[服务器] UI 创建失败:", uiErr)
 else
-    print("[服务器] 独立测试脚本加载完成")
+    print("[服务器] 远程脚本加载完成")
     notify("服务器类", "加载完成", "aperture", 3)
 end
