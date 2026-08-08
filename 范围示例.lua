@@ -1,7 +1,5 @@
--- 范围放大（参考 BS-loves_you.lua 的"范围"功能）
 -- 把其他玩家的 HumanoidRootPart 放大成可自由调节大小的红色半透明立方体
 -- 因为是真实根部件：射线子弹、Touched 近战都能正常命中
-print("[范围放大] 开始执行")
 
 local WindUI
 do
@@ -178,13 +176,4 @@ tab:Button({
             pcall(mainToggle.Set, mainToggle, false)
         end
     end,
-})
-
-print("[范围放大] 全部加载完成")
-
-WindUI:Notify({
-    Title = "范围放大",
-    Content = "加载完成！开启后可用滑块自由调范围",
-    Icon = "radar",
-    Duration = 4,
 })
