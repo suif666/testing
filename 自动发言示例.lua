@@ -1,6 +1,5 @@
 -- 发言类 远程脚本（自动发言 + 私聊，依赖主脚本提供 SayTab）
 -- 主脚本需设置：getgenv().Tabs.SayTab（或 getgenv().SutureSayTab）
-print("[发言类] 远程脚本开始执行")
 
 if getgenv().__SUTURE_SAY_LOADED then
     return
@@ -206,9 +205,3 @@ local uiOk, uiErr = pcall(function()
         end
     })
 end)
-
-if not uiOk then
-    warn("[发言类] Tab UI 创建失败:", uiErr)
-else
-    print("[发言类] 远程脚本加载完成")
-end
