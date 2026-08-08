@@ -18,7 +18,6 @@ do
     end
     WindUI = res
 end
-print("[范围放大] WindUI 加载完成")
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
