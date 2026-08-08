@@ -1,6 +1,5 @@
 -- 自瞄类 远程脚本（显示功能 + UI，依赖主脚本提供 AimbotTab）
 -- 主脚本需设置：getgenv().Tabs.AimbotTab（或 getgenv().SutureAimbotTab）
-print("[自瞄类] 远程脚本开始执行")
 
 if getgenv().__SUTURE_AIMBOT_LOADED then
     return
@@ -283,9 +282,3 @@ local uiOk, uiErr = pcall(function()
         end
     })
 end)
-
-if not uiOk then
-    warn("[自瞄类] Tab UI 创建失败:", uiErr)
-else
-    print("[自瞄类] 远程脚本加载完成")
-end
