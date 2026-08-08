@@ -1292,10 +1292,3 @@ local uiOk, uiErr = pcall(function()
 
     adminListText = admSec:Paragraph({ Title = "检测到的管理员", Desc = "未开启" })
 end)
-
-if not uiOk then
-    warn("[服务器] UI 创建失败:", uiErr)
-else
-    print("[服务器] 远程脚本加载完成")
-    notify("服务器类", "加载完成", "aperture", 3)
-end
