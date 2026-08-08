@@ -1,6 +1,5 @@
 -- 雷达 远程脚本（显示功能 + UI，依赖主脚本提供 RadarTab）
 -- 主脚本需设置：getgenv().Tabs.RadarTab（或 getgenv().SutureRadarTab）
-print("[雷达] 远程脚本开始执行")
 
 if getgenv().__SUTURE_RADAR_LOADED then
     return
@@ -589,9 +588,3 @@ local okUI, errUI = pcall(function()
         end,
     })
 end)
-
-if not okUI then
-    warn("[雷达] Tab UI 创建失败:", errUI)
-else
-    print("[雷达] 远程脚本加载完成")
-end
