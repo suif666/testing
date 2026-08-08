@@ -1,6 +1,5 @@
 -- ESP类 远程脚本（玩家ESP + NPC ESP，依赖主脚本提供 ESPTab）
 -- 主脚本需设置：getgenv().Tabs.ESPTab（或 getgenv().SutureESPTab）
-print("[ESP] 远程脚本开始执行")
 
 if getgenv().__SUTURE_ESP_LOADED then
     return
@@ -566,9 +565,3 @@ local uiOk, uiErr = pcall(function()
         end
     })
 end)
-
-if not uiOk then
-    warn("[ESP] Tab UI 创建失败:", uiErr)
-else
-    print("[ESP] 远程脚本加载完成")
-end
