@@ -1,6 +1,5 @@
 -- 玩家类 远程脚本（显示功能 + UI，依赖主脚本提供 PlayerTab）
 -- 主脚本需设置：getgenv().Tabs.PlayerTab（或 getgenv().SuturePlayerTab）
-print("[玩家类] 远程脚本开始执行")
 
 if getgenv().__SUTURE_PLAYER_LOADED then
     return
@@ -376,9 +375,3 @@ local uiOk, uiErr = pcall(function()
         end
     })
 end)
-
-if not uiOk then
-    warn("[玩家类] Tab UI 创建失败:", uiErr)
-else
-    print("[玩家类] 远程脚本加载完成")
-end
