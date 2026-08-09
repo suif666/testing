@@ -1,9 +1,11 @@
--- 连点器 v1 —— 独立脚本（UI 风格沿用 UI 文本提取器）
+-- 连点器 v2 —— 独立脚本（UI 风格沿用 UI 文本提取器）
 -- 用法：
---  ＋ 添加一个点击按钮　－ 删除最后一个点击按钮
---  长按某个点击按钮可设置它的每秒点击次数
---  开启连点后按 1,2,3,1,2,3... 顺序循环点击所有按钮
---  可见性按钮可隐藏/显示按钮，隐藏时照常连点
+--  ＋ 添加一个屏幕上的圆形点击按钮　－ 删除最后一个
+--  拖动圆形按钮可把它对准游戏里的目标按钮
+--  长按圆形按钮（0.5秒）设置它的每秒点击次数
+--  开始连点后按 1,2,3,1,2,3... 顺序循环点击所有圆形按钮位置，
+--  此时圆形会自动变透明（不遮挡、点击直接穿透到游戏按钮）
+--  可见性按钮可隐藏/显示圆形，隐藏时照常连点
 
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
@@ -103,8 +105,8 @@ end
 
 -- ==================== 主窗口 ====================
 local Main = New("Frame", {
-    Size = UDim2.new(0, 420, 0, 320),
-    Position = UDim2.new(0.5, -210, 0.5, -160),
+    Size = UDim2.new(0, 380, 0, 300),
+    Position = UDim2.new(0.5, -190, 0.5, -150),
     BackgroundColor3 = Theme.Panel,
     BorderSizePixel = 0,
     Active = true,
@@ -159,7 +161,7 @@ for _, b in ipairs({AddBtn, DelBtn, VisBtn, StartBtn}) do
     StyleButton(b, b.BackgroundColor3)
 end
 
--- 右侧：状态 + 点击按钮列表
+-- 右侧：状态 + 提示
 local StatusLabel = New("TextLabel", {
     BackgroundTransparency = 1,
     Text = "已停止 ｜ 按钮 1 个",
@@ -170,23 +172,16 @@ local StatusLabel = New("TextLabel", {
     TextSize = 12
 }, Main)
 
-local RightScroll = New("ScrollingFrame", {
-    BackgroundColor3 = Theme.Card,
-    BorderSizePixel = 0,
-    CanvasSize = UDim2.new(0,0,0,0),
-    ScrollBarThickness = 8,
-    ScrollingDirection = Enum.ScrollingDirection.Y,
-    VerticalScrollBarInset = Enum.ScrollBarInset.Always,
-    ScrollBarImageColor3 = Color3.fromRGB(170,170,175),
-    ClipsDescendants = true
+local HintLabel = New("TextLabel", {
+    BackgroundTransparency = 1,
+    Text = "拖动圆形按钮对准目标\n长按圆形按钮设置次数\n开始后圆形变透明，点击穿透",
+    TextColor3 = Theme.Muted,
+    Font = Enum.Font.SourceSans,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    TextYAlignment = Enum.TextYAlignment.Top,
+    TextWrapped = true,
+    TextSize = 12
 }, Main)
-Corner(RightScroll, 8)
-Stroke(RightScroll, Theme.Stroke, 1, 0.38)
-
-local ListLayout = New("UIListLayout", {
-    Padding = UDim.new(0, 6),
-    SortOrder = Enum.SortOrder.LayoutOrder
-}, RightScroll)
 
 local ResizeHandle = New("TextButton", {
     Size = UDim2.new(0, 22, 0, 22),
@@ -230,20 +225,21 @@ local SettingsOpen = false
 local SettingsBtn = nil
 local Minimized = false
 local Animating = false
-local LastNormalSize = Vector2.new(420, 320)
+local LastNormalSize = Vector2.new(380, 300)
 local LastNormalPosition = nil
 local LastCirclePosition = nil
 
--- ==================== 设置弹窗 ====================
+-- ==================== 设置弹窗（挂主窗口内，保证显示在最上层） ====================
 local SettingsFrame = New("Frame", {
-    Size = UDim2.new(0, 300, 0, 180),
-    Position = UDim2.new(0.5, -150, 0.5, -90),
+    Size = UDim2.new(0, 300, 0, 190),
+    AnchorPoint = Vector2.new(0.5, 0.5),
+    Position = UDim2.new(0.5, 0, 0.5, 0),
     BackgroundColor3 = Theme.Panel,
     BorderSizePixel = 0,
     Active = true,
     Visible = false,
-    ZIndex = 40,
-}, ScreenGui)
+    ZIndex = 50,
+}, Main)
 Corner(SettingsFrame, 12)
 Stroke(SettingsFrame, Theme.Stroke, 1, 0.2)
 
@@ -251,11 +247,12 @@ local SettingsTitle = New("TextLabel", {
     Size = UDim2.new(1, -20, 0, 34),
     Position = UDim2.new(0, 10, 0, 6),
     BackgroundTransparency = 1,
-    Text = "按钮设置",
+    Text = "圆形按钮设置",
     TextColor3 = Color3.new(1,1,1),
     TextSize = 16,
     Font = Enum.Font.SourceSansBold,
-    TextXAlignment = Enum.TextXAlignment.Left
+    TextXAlignment = Enum.TextXAlignment.Left,
+    ZIndex = 51
 }, SettingsFrame)
 
 local CpsHint = New("TextLabel", {
@@ -266,7 +263,8 @@ local CpsHint = New("TextLabel", {
     TextColor3 = Color3.fromRGB(200,200,205),
     TextSize = 12,
     Font = Enum.Font.SourceSans,
-    TextXAlignment = Enum.TextXAlignment.Left
+    TextXAlignment = Enum.TextXAlignment.Left,
+    ZIndex = 51
 }, SettingsFrame)
 
 local CpsInput = New("TextBox", {
@@ -279,7 +277,8 @@ local CpsInput = New("TextBox", {
     PlaceholderColor3 = Color3.fromRGB(155,155,160),
     Font = Enum.Font.SourceSansBold,
     TextSize = 16,
-    ClearTextOnFocus = false
+    ClearTextOnFocus = false,
+    ZIndex = 51
 }, SettingsFrame)
 Corner(CpsInput, 8)
 Stroke(CpsInput, Theme.Stroke, 1, 0.38)
@@ -291,7 +290,8 @@ local SettingsOk = New("TextButton", {
     TextColor3 = Color3.new(1,1,1),
     Font = Enum.Font.SourceSansBold,
     TextSize = 14,
-    BackgroundColor3 = Theme.Green
+    BackgroundColor3 = Theme.Green,
+    ZIndex = 51
 }, SettingsFrame)
 StyleButton(SettingsOk, SettingsOk.BackgroundColor3)
 
@@ -302,9 +302,30 @@ local SettingsCancel = New("TextButton", {
     TextColor3 = Color3.new(1,1,1),
     Font = Enum.Font.SourceSansBold,
     TextSize = 14,
-    BackgroundColor3 = Theme.Card2
+    BackgroundColor3 = Theme.Card2,
+    ZIndex = 51
 }, SettingsFrame)
 StyleButton(SettingsCancel, SettingsCancel.BackgroundColor3)
+
+-- ==================== 圆形按钮管理 ====================
+local function ResizeCanvas()
+    -- 保留占位，窗口无列表时不需要
+end
+
+local function RefreshCircleLabels()
+    for i, circle in ipairs(ClickButtons) do
+        circle.Text = i.."\n"..tostring(circle:GetAttribute("CPS") or 5).."次"
+    end
+end
+
+local function UpdateStatus(msg)
+    local state = Enabled and "运行中" or "已停止"
+    if msg then
+        StatusLabel.Text = state.." ｜ 圆形 "..#ClickButtons.." 个 ｜ "..msg
+    else
+        StatusLabel.Text = state.." ｜ 圆形 "..#ClickButtons.." 个"
+    end
+end
 
 local function CloseSettings()
     SettingsOpen = false
@@ -312,43 +333,17 @@ local function CloseSettings()
     if SettingsFrame then SettingsFrame.Visible = false end
 end
 
-local function OpenSettings(btn)
-    if SettingsOpen or not btn or not btn.Parent then return end
+local function OpenSettings(circle)
+    if SettingsOpen or not circle or not circle.Parent then return end
     SettingsOpen = true
-    SettingsBtn = btn
+    SettingsBtn = circle
     local idx = 1
-    for i, b in ipairs(ClickButtons) do
-        if b == btn then idx = i; break end
+    for i, c in ipairs(ClickButtons) do
+        if c == circle then idx = i; break end
     end
-    SettingsTitle.Text = "按钮 "..idx.." 设置"
-    CpsInput.Text = tostring(btn:GetAttribute("CPS") or 5)
+    SettingsTitle.Text = "圆形按钮 "..idx.." 设置"
+    CpsInput.Text = tostring(circle:GetAttribute("CPS") or 5)
     SettingsFrame.Visible = true
-end
-
--- ==================== 点击按钮管理 ====================
-local function ResizeCanvas()
-    task.defer(function()
-        task.wait()
-        if RightScroll and ListLayout then
-            RightScroll.CanvasSize = UDim2.new(0, 0, 0, ListLayout.AbsoluteContentSize.Y + 10)
-        end
-    end)
-end
-
-local function RefreshButtonLabels()
-    for i, btn in ipairs(ClickButtons) do
-        btn.LayoutOrder = i
-        btn.Text = "按钮 "..i.."\n"..tostring(btn:GetAttribute("CPS") or 5).." 次/秒"
-    end
-end
-
-local function UpdateStatus(msg)
-    local state = Enabled and "运行中" or "已停止"
-    if msg then
-        StatusLabel.Text = state.." ｜ 按钮 "..#ClickButtons.." 个 ｜ "..msg
-    else
-        StatusLabel.Text = state.." ｜ 按钮 "..#ClickButtons.." 个"
-    end
 end
 
 SettingsOk.MouseButton1Click:Connect(function()
@@ -356,7 +351,7 @@ SettingsOk.MouseButton1Click:Connect(function()
     v = math.clamp(math.round(v), 1, 50)
     if SettingsBtn then
         SettingsBtn:SetAttribute("CPS", v)
-        RefreshButtonLabels()
+        RefreshCircleLabels()
     end
     CloseSettings()
 end)
@@ -365,85 +360,124 @@ SettingsCancel.MouseButton1Click:Connect(function()
     CloseSettings()
 end)
 
-local function MakeClickButton(index)
-    local btn = New("TextButton", {
-        Name = "ClickBtn",
-        Size = UDim2.new(1, -12, 0, 54),
+local function DefaultCirclePosition(index)
+    local vw, vh = 800, 600
+    pcall(function()
+        local cam = workspace.CurrentCamera
+        if cam then vw, vh = cam.ViewportSize.X, cam.ViewportSize.Y end
+    end)
+    local grid = 5
+    local col = (index - 1) % grid
+    local row = math.floor((index - 1) / grid)
+    local x = math.clamp(math.floor(vw / 2) - 32 + col * 76, 8, math.max(8, vw - 72))
+    local y = math.clamp(math.floor(vh / 2) - 32 + row * 76, 8, math.max(8, vh - 72))
+    return UDim2.new(0, x, 0, y)
+end
+
+local function MakeClickCircle(index)
+    local circle = New("TextButton", {
+        Name = "ClickCircle",
+        Size = UDim2.new(0, 64, 0, 64),
+        Position = DefaultCirclePosition(index),
         BackgroundColor3 = Theme.Card2,
         BorderSizePixel = 0,
-        Text = "按钮 "..index.."\n5 次/秒",
+        Text = index.."\n5次",
         TextColor3 = Color3.new(1,1,1),
-        TextSize = 16,
+        TextSize = 15,
         Font = Enum.Font.SourceSansBold,
         AutoButtonColor = true,
         Active = true,
-        LayoutOrder = index,
-    }, RightScroll)
-    Corner(btn, 10)
-    Stroke(btn, Theme.Stroke, 1, 0.45)
-    btn:SetAttribute("CPS", 5)
+        Draggable = true,
+        ZIndex = 30,
+    }, ScreenGui)
+    Corner(circle, 32)
+    Stroke(circle, Theme.Stroke, 2, 0.35)
+    circle:SetAttribute("CPS", 5)
 
     -- 长按 0.5 秒打开设置
     local holding = false
-    btn.InputBegan:Connect(function(input)
+    circle.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             holding = true
             task.spawn(function()
                 task.wait(0.5)
-                if holding and btn.Parent and not SettingsOpen then
-                    OpenSettings(btn)
+                if holding and circle.Parent and not SettingsOpen then
+                    OpenSettings(circle)
                 end
             end)
         end
     end)
-    btn.InputEnded:Connect(function(input)
+    circle.InputEnded:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             holding = false
         end
     end)
 
-    table.insert(ClickButtons, btn)
-    return btn
+    table.insert(ClickButtons, circle)
+    return circle
 end
 
-local function AddClickButton()
+local function AddClickCircle()
     if #ClickButtons >= MAX_BUTTONS then
-        UpdateStatus("最多 "..MAX_BUTTONS.." 个按钮")
+        UpdateStatus("最多 "..MAX_BUTTONS.." 个")
         return
     end
-    local btn = MakeClickButton(#ClickButtons + 1)
-    if not ButtonsVisible then btn.Visible = false end
-    RefreshButtonLabels()
-    ResizeCanvas()
-    UpdateStatus("已添加")
+    local circle = MakeClickCircle(#ClickButtons + 1)
+    if not ButtonsVisible then circle.Visible = false end
+    if Enabled then
+        -- 运行中添加的圆形同样保持透明穿透
+        circle.BackgroundTransparency = 1
+        circle.TextTransparency = 0.2
+        circle.Active = false
+        circle.Draggable = false
+        circle.AutoButtonColor = false
+    end
+    RefreshCircleLabels()
+    UpdateStatus("已添加，可拖动对准目标")
 end
 
-local function RemoveLastButton()
-    local btn = table.remove(ClickButtons)
-    if not btn then
-        UpdateStatus("没有按钮可删除")
+local function RemoveLastCircle()
+    local circle = table.remove(ClickButtons)
+    if not circle then
+        UpdateStatus("没有圆形可删除")
         return
     end
-    if SettingsBtn == btn then CloseSettings() end
-    btn:Destroy()
-    RefreshButtonLabels()
-    ResizeCanvas()
+    if SettingsBtn == circle then CloseSettings() end
+    circle:Destroy()
+    RefreshCircleLabels()
     UpdateStatus("已删除")
 end
 
-local function SetButtonsVisible(v)
+local function SetCirclesVisible(v)
     ButtonsVisible = v
-    for _, btn in ipairs(ClickButtons) do
-        btn.Visible = v
+    for _, circle in ipairs(ClickButtons) do
+        circle.Visible = v
     end
     VisBtn.Text = v and "隐藏按钮" or "显示按钮"
-    UpdateStatus(v and "按钮已显示" or "按钮已隐藏，照常连点")
+    UpdateStatus(v and "圆形已显示" or "圆形已隐藏，照常连点")
+end
+
+-- 开始连点后圆形变透明（输入穿透到游戏按钮），停止后恢复可拖动/长按
+local function SetCirclesInteractive(interactive)
+    for _, circle in ipairs(ClickButtons) do
+        circle.Active = interactive
+        circle.Draggable = interactive
+        circle.AutoButtonColor = interactive
+        if interactive then
+            circle.BackgroundTransparency = 0
+            circle.TextTransparency = 0
+        else
+            circle.BackgroundTransparency = 1
+            circle.TextTransparency = 0.2
+        end
+    end
 end
 
 local function SetEnabled(v)
     Enabled = v
     StartBtn.Text = v and "停止连点" or "开始连点"
     StartBtn.BackgroundColor3 = v and Theme.Red or Theme.Green
+    SetCirclesInteractive(not v)
     UpdateStatus()
 end
 
@@ -461,24 +495,22 @@ local function SendClickAt(x, y)
     end
 end
 
-local function ClickButton(btn)
-    local pos = btn.AbsolutePosition
-    local size = btn.AbsoluteSize
+local function ClickCircle(circle)
+    local pos = circle.AbsolutePosition
+    local size = circle.AbsoluteSize
     if size.X <= 0 or size.Y <= 0 then return end
-    local x = pos.X + size.X / 2
-    local y = pos.Y + size.Y / 2
-    SendClickAt(x, y)
+    SendClickAt(pos.X + size.X / 2, pos.Y + size.Y / 2)
 end
 
 -- 主循环：按 1,2,3,1,2,3... 顺序循环点击
 task.spawn(function()
     while ScreenGui and ScreenGui.Parent do
         if Enabled and not SettingsOpen then
-            for _, btn in ipairs(ClickButtons) do
+            for _, circle in ipairs(ClickButtons) do
                 if not Enabled then break end
-                if btn.Parent then
-                    ClickButton(btn)
-                    local cps = math.clamp(btn:GetAttribute("CPS") or 5, 1, 50)
+                if circle.Parent then
+                    ClickCircle(circle)
+                    local cps = math.clamp(circle:GetAttribute("CPS") or 5, 1, 50)
                     task.wait(1 / cps)
                 end
             end
@@ -493,10 +525,10 @@ local function LayoutUI()
     if Minimized or Animating then return end
 
     local w, h = Main.AbsoluteSize.X, Main.AbsoluteSize.Y
-    if w <= 0 then w = 420 end
-    if h <= 0 then h = 320 end
+    if w <= 0 then w = 380 end
+    if h <= 0 then h = 300 end
 
-    local scale = math.clamp(math.sqrt((w / 420) * (h / 320)), 0.72, 1.7)
+    local scale = math.clamp(math.sqrt((w / 380) * (h / 300)), 0.72, 1.7)
     local pad = math.floor(math.clamp(8 * scale, 6, 14))
     local titleH = math.floor(math.clamp(32 * scale, 26, 48))
     local sideW = math.floor(math.clamp(118 * scale, 96, 190))
@@ -529,7 +561,7 @@ local function LayoutUI()
         b.TextSize = btnTextSize
     end
 
-    -- 右侧：状态栏 + 点击按钮列表
+    -- 右侧：状态 + 提示
     local listX = pad * 2 + sideW
     local rightW = math.max(120, w - listX - pad)
 
@@ -537,15 +569,11 @@ local function LayoutUI()
     StatusLabel.Position = UDim2.new(0, listX, 0, pad)
     StatusLabel.TextSize = math.floor(math.clamp(12 * scale, 10, 17))
 
-    RightScroll.Size = UDim2.new(0, rightW, 1, -statusH - pad*2 - gap)
-    RightScroll.Position = UDim2.new(0, listX, 0, statusH + pad + gap)
-
-    for _, btn in ipairs(ClickButtons) do
-        btn.TextSize = math.floor(math.clamp(16 * scale, 12, 22))
-    end
+    HintLabel.Size = UDim2.new(0, rightW, 1, -statusH - pad*2 - gap)
+    HintLabel.Position = UDim2.new(0, listX, 0, statusH + pad + gap)
+    HintLabel.TextSize = math.floor(math.clamp(12 * scale, 10, 17))
 
     ResizeHandle.Visible = true
-    ResizeCanvas()
 end
 
 -- ==================== 最小化 <-> 悬浮圆点 ====================
@@ -629,9 +657,9 @@ local function RestoreFromCircle()
 end
 
 -- ==================== 事件连接 ====================
-AddBtn.MouseButton1Click:Connect(function() AddClickButton() end)
-DelBtn.MouseButton1Click:Connect(function() RemoveLastButton() end)
-VisBtn.MouseButton1Click:Connect(function() SetButtonsVisible(not ButtonsVisible) end)
+AddBtn.MouseButton1Click:Connect(function() AddClickCircle() end)
+DelBtn.MouseButton1Click:Connect(function() RemoveLastCircle() end)
+VisBtn.MouseButton1Click:Connect(function() SetCirclesVisible(not ButtonsVisible) end)
 StartBtn.MouseButton1Click:Connect(function() SetEnabled(not Enabled) end)
 
 CloseBtn.MouseButton1Click:Connect(function() ScreenGui:Destroy() end)
@@ -643,8 +671,6 @@ end)
 MiniCircle.MouseButton1Click:Connect(function()
     RestoreFromCircle()
 end)
-
-ListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() ResizeCanvas() end)
 
 Main:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
     if not Minimized then LayoutUI() end
@@ -666,8 +692,8 @@ UserInputService.InputChanged:Connect(function(input)
     if not resizing then return end
     if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then return end
     local delta = input.Position - resizeStartPos
-    local newW = math.clamp(resizeStartSize.X + delta.X, 360, 720)
-    local newH = math.clamp(resizeStartSize.Y + delta.Y, 260, 540)
+    local newW = math.clamp(resizeStartSize.X + delta.X, 340, 700)
+    local newH = math.clamp(resizeStartSize.Y + delta.Y, 240, 520)
     Main.Size = UDim2.new(0, newW, 0, newH)
     LastNormalSize = Vector2.new(newW, newH)
 end)
@@ -681,7 +707,7 @@ end)
 
 -- ==================== 初始化 ====================
 LayoutUI()
-AddClickButton()
+AddClickCircle()
 UpdateStatus()
 
-print("[连点器] 已加载 | 长按按钮设置次数 | 1,2,3 顺序连点")
+print("[连点器] 已加载 | 拖动圆形对准目标 | 长按设置次数 | 1,2,3 顺序连点")
