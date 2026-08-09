@@ -149,8 +149,9 @@ end
 local function IsVisible(obj)
     local cur = obj
     while cur and cur ~= game do
-        local ok, v = pcall(function() return cur.Visible end)
-        if ok and v == false then return false end
+        -- 直接读取 Visible：非 GUI 对象读不到该属性时返回 nil 而非报错。
+        -- 外层 ScanContainer 已对每个文本对象做了 pcall 保护，单对象出错不会连累整批
+        if cur.Visible == false then return false end
         cur = cur.Parent
     end
     return true
@@ -260,12 +261,12 @@ local function ScanContainer(root, section, skipContainer)
     if not root then return 0 end
     local descendants = root:GetDescendants()
     for i, obj in ipairs(descendants) do
-        -- 单个对象出错只跳过该对象，绝不能让整批扫描静默失败
-        pcall(function()
-            if IsTextObject(obj) then
+        if IsTextObject(obj) then
+            -- 单个文本对象出错只跳过该对象，绝不能让整批扫描静默失败
+            pcall(function()
                 added = added + TryReadText(obj, section, skipContainer)
-            end
-        end)
+            end)
+        end
         -- 每处理 400 个元素 yield 一次：既防止阻塞主线程，也避免频繁让帧
         -- 导致大场景扫描耗时过长
         if i % 400 == 0 then
@@ -891,6 +892,10 @@ local function RestyleVisibleRows()
 end
 
 -- ==================== 创建单行（支持对象池） ====================
+-- 前置声明：CreateDisplayRow 内的删除回调也会调用 SetDisplay，
+-- 若不提前声明，闭包捕获到的是全局 nil，点删除会报 "attempt to call a nil value"
+local SetDisplay
+
 local function CreateDisplayRow(line, index)
     -- 多行文本用 ⏎ 占位显示为单行，数据本身（line）保持完整，复制/删除不受影响
     local displayLine = string.gsub(line, "\n", " ⏎ ")
@@ -1033,8 +1038,6 @@ local function PrepareLines(text)
     return lines
 end
 
-local SetDisplay
-
 SetDisplay = function(text, autoBottom, animate, forceRebuild)
     local newLines = PrepareLines(text)
     CurrentDisplayText = table.concat(newLines, "\n")
@@ -1097,7 +1100,8 @@ SetDisplay = function(text, autoBottom, animate, forceRebuild)
         if CurrentUpdateToken ~= token then return end
         local row = CreateDisplayRow(line, i)
         table.insert(DisplayedRows, row)
-        if i % 12 == 0 then
+        -- 每 40 行让一帧：行创建很轻量，太频繁让帧反而让大列表渲染耗时数秒
+        if i % 40 == 0 then
             task.wait()
             if CurrentUpdateToken ~= token then return end
         end
