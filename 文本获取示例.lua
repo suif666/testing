@@ -149,9 +149,8 @@ end
 local function IsVisible(obj)
     local cur = obj
     while cur and cur ~= game do
-        -- 直接读取 Visible：非 GUI 对象读不到该属性时返回 nil 而非报错，
-        -- 省掉逐层 pcall 包装的开销（扫描大量对象时提升明显）
-        if cur.Visible == false then return false end
+        local ok, v = pcall(function() return cur.Visible end)
+        if ok and v == false then return false end
         cur = cur.Parent
     end
     return true
@@ -259,19 +258,20 @@ end
 local function ScanContainer(root, section, skipContainer)
     local added = 0
     if not root then return 0 end
-    pcall(function()
-        local descendants = root:GetDescendants()
-        for i, obj in ipairs(descendants) do
+    local descendants = root:GetDescendants()
+    for i, obj in ipairs(descendants) do
+        -- 单个对象出错只跳过该对象，绝不能让整批扫描静默失败
+        pcall(function()
             if IsTextObject(obj) then
                 added = added + TryReadText(obj, section, skipContainer)
             end
-            -- 每处理 400 个元素 yield 一次：既防止阻塞主线程，也避免频繁让帧
-            -- 导致大场景扫描耗时过长
-            if i % 400 == 0 then
-                task.wait()
-            end
+        end)
+        -- 每处理 400 个元素 yield 一次：既防止阻塞主线程，也避免频繁让帧
+        -- 导致大场景扫描耗时过长
+        if i % 400 == 0 then
+            task.wait()
         end
-    end)
+    end
     return added
 end
 
@@ -293,11 +293,11 @@ local function ScanSection(section)
         added = added + ScanContainer(CoreGui, section, false)
         if huiRoot and huiRoot ~= CoreGui then added = added + ScanContainer(huiRoot, section, false) end
     elseif section == "全部" then
-        -- 原实现会重复扫描 PlayerGui/CoreGui（直接扫一次 + 经"第三方UI"再扫一次），
-        -- 这里每个容器只扫一遍，覆盖范围完全一致但耗时减半
-        added = added + ScanContainer(PlayerGui, section, true)
-        added = added + ScanContainer(CoreGui, section, true)
-        if huiRoot and huiRoot ~= CoreGui then added = added + ScanContainer(huiRoot, section, true) end
+        -- 恢复原逻辑：扫一遍容器、文本同时归入具体分区与"全部"，
+        -- 避免切换分区后显示为空（此前"只扫一遍"的去重会把具体分区漏掉，已回退）
+        added = added + ScanSection("PlayerGui")
+        added = added + ScanSection("CoreGui")
+        added = added + ScanSection("第三方UI")
     end
     Rebuild(section)
     Rebuild("全部")
