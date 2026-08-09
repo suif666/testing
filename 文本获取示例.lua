@@ -1,3 +1,19 @@
+-- Roblox UI 文本提取器 v24（响应式布局 + 圆形最小化 + 动画）
+-- 本版改进（在 v23 基础上）：
+-- 1. 【真正修复】复制按钮错位 bug：原代码复制按钮定位公式少减了一个按钮宽度，导致复制按钮
+--    右侧超出行容器边界，被 Scroll 的 ClipsDescendants 裁掉一部分，看起来"错位/显示不全"
+-- 2. 【真正修复】收藏/删除按钮显示不全：与上面同一处坐标计算连带问题，一并修正
+-- 3. 【修复】文本框偶发不显示、需切换分区才恢复的bug：SetDisplay 在"空文本"分支里没有
+--    使当前 token 失效，导致后台一个尚未跑完的旧渲染协程会在清空后继续插入行，造成显示错乱。
+--    现在无论走哪个分支，一进入 SetDisplay 就立刻使旧 token 失效。
+-- 4. 【新增】整个UI（含所有按钮/文字/间距）根据窗口大小连续缩放：UI越大，间距和字号越宽松；
+--    UI越小，越紧凑。拖动右下角↘手柄时实时生效，且只更新已存在的行属性（不重建实例），
+--    对低配设备友好。
+-- 5. 【新增】最小化不再收起成标题栏，而是收起成一个可拖动的小圆点悬浮球，点击圆点还原。
+-- 6. 【新增】动画效果：最小化/还原使用缩放+淡出/淡入过渡；切换分区时列表有轻微滑入过渡；
+--    动画时长很短（≤0.22秒）且只对单个Frame做Tween（不逐行Tween），保证低配设备流畅。
+-- 7. 【优化】自动刷新时如果内容与上次显示完全一致，不再重建整个列表（避免每1.5秒重复重建UI）。
+-- 8. 保留全部核心功能：多分区、对象池、批量yield防卡顿、搜索、收藏栏、导出Lua、屏蔽、自动刷新、复制、删除、缩放
 
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
@@ -84,6 +100,7 @@ local CurrentUIScale = 1
 -- ==================== 创建单行（支持对象池） ====================
 local RowPool = {}
 local MAX_POOL_SIZE = 400
+local ScanErrorLog = 0 -- 扫描错误日志计数（只打印前几条，避免刷屏）
 
 -- 搜索防抖相关
 local SearchDebounceTimer = nil
@@ -133,9 +150,8 @@ end
 local function IsVisible(obj)
     local cur = obj
     while cur and cur ~= game do
-        -- 直接读取 Visible：非 GUI 对象读不到该属性时返回 nil 而非报错。
-        -- 外层 ScanContainer 已对每个文本对象做了 pcall 保护，单对象出错不会连累整批
-        if cur.Visible == false then return false end
+        local ok, v = pcall(function() return cur.Visible end)
+        if ok and v == false then return false end
         cur = cur.Parent
     end
     return true
@@ -247,9 +263,13 @@ local function ScanContainer(root, section, skipContainer)
     for i, obj in ipairs(descendants) do
         if IsTextObject(obj) then
             -- 单个文本对象出错只跳过该对象，绝不能让整批扫描静默失败
-            pcall(function()
+            local okT, errT = pcall(function()
                 added = added + TryReadText(obj, section, skipContainer)
             end)
+            if not okT and ScanErrorLog < 5 then
+                ScanErrorLog = ScanErrorLog + 1
+                warn("[UI提取] 跳过文本对象:", errT)
+            end
         end
         -- 每处理 400 个元素 yield 一次：既防止阻塞主线程，也避免频繁让帧
         -- 导致大场景扫描耗时过长
