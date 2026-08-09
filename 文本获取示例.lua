@@ -790,7 +790,9 @@ local CurrentUpdateToken = 0
 
 local function ClearScroll()
     for _, obj in ipairs(Scroll:GetChildren()) do
-        if obj:IsA("Frame") then
+        if obj:IsA("UIListLayout") then
+            -- 保留布局对象
+        elseif obj:IsA("Frame") then
             obj.Visible = false
             obj.Parent = nil
             if #RowPool < MAX_POOL_SIZE then
@@ -798,6 +800,9 @@ local function ClearScroll()
             else
                 obj:Destroy()
             end
+        else
+            -- 空提示（TextButton）等非 Frame 子元素直接销毁，避免无限累积
+            obj:Destroy()
         end
     end
     DisplayedRows = {}
@@ -1236,7 +1241,9 @@ local function LayoutUI()
     if h <= 0 then h = 340 end
 
     -- 基准尺寸为默认的 480x340，scale=1 时还原成默认版式
-    local scale = math.clamp(math.min(w / 480, h / 340), 0.72, 1.7)
+    -- 用几何平均：任意方向拖动都会触发整体缩放。原 min 版本只在宽高同时
+    -- 同比例变化时才缩放，只拉宽/只拉高时左侧功能区纹丝不动
+    local scale = math.clamp(math.sqrt((w / 480) * (h / 340)), 0.72, 1.7)
     CurrentUIScale = scale
 
     local pad = math.floor(math.clamp(8 * scale, 6, 14))
