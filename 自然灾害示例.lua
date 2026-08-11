@@ -48,10 +48,12 @@ local function pivotCharacter(cf)
 	end
 end
 
--- 灾难关键词扫描
+-- 灾难关键词扫描（中英文都带）
 local disasterKeywords = {
-	"tornado", "flood", "earthquake", "meteor", "volcano", "blizzard",
-	"storm", "sandstorm", "thunder", "acid", "tsunami", "fire", "slide", "rain"
+	"tornado", "龙卷风", "flood", "洪水", "earthquake", "地震", "meteor", "陨石",
+	"volcano", "火山", "blizzard", "暴风雪", "storm", "风暴", "sandstorm", "沙尘暴",
+	"thunder", "雷", "acid", "酸雨", "tsunami", "海啸", "fire", "火灾",
+	"slide", "滑坡", "rain", "雨"
 }
 
 local function scanForDisaster()
@@ -151,15 +153,23 @@ tab:Toggle({
 	Callback = function(v)
 		AutoDetect = v
 		if v then
+			print("[灾难检测] 已开启，当前扫描结果:", scanForDisaster())
 			task.spawn(function()
 				local last = ""
 				while AutoDetect do
 					local detected = scanForDisaster()
 					if detected ~= last then
 						last = detected
-						pcall(function()
-							WindUI:Notify({ Title = "检测到灾难", Content = detected, Duration = 4, Icon = "alert-triangle" })
-						end)
+						if detected ~= "未知" then
+							print("[灾难检测] 检测到:", detected)
+							pcall(function()
+								game:GetService("StarterGui"):SetCore("SendNotification", {
+									Title = "检测到灾难",
+									Text = tostring(detected),
+									Duration = 5
+								})
+							end)
+						end
 					end
 					task.wait(1)
 				end
@@ -177,11 +187,23 @@ tab:Toggle({
 	end
 })
 
+-- 快落地时才清零垂直速度，避免高空清零导致穿地板
+local RayParams = RaycastParams.new()
+RayParams.FilterType = Enum.RaycastFilterType.Exclude
+RayParams.FilterDescendantsInstances = {Character}
+lp.CharacterAdded:Connect(function(char)
+	RayParams.FilterDescendantsInstances = {char}
+end)
+
 RunService.Heartbeat:Connect(function()
-	if NoFallDamage and HumanoidRootPart and HumanoidRootPart.Parent then
+	if not NoFallDamage then return end
+	if HumanoidRootPart and HumanoidRootPart.Parent then
 		local velocity = HumanoidRootPart.AssemblyLinearVelocity
-		if velocity.Y < -45 then
-			HumanoidRootPart.AssemblyLinearVelocity = Vector3.new(velocity.X, 0, velocity.Z)
+		if velocity.Y < -30 then
+			local hit = workspace:Raycast(HumanoidRootPart.Position, Vector3.new(0, -18, 0), RayParams)
+			if hit then
+				HumanoidRootPart.AssemblyLinearVelocity = Vector3.new(velocity.X, 0, velocity.Z)
+			end
 		end
 	end
 end)
