@@ -26,17 +26,12 @@ do
 end
 
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
 local lp = Players.LocalPlayer
 
 local Character = lp.Character or lp.CharacterAdded:Wait()
-local Humanoid = Character:WaitForChild("Humanoid", 10)
-local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart", 10)
 
 local function refreshCharacter(char)
 	Character = char
-	Humanoid = char:WaitForChild("Humanoid", 10)
-	HumanoidRootPart = char:WaitForChild("HumanoidRootPart", 10)
 end
 lp.CharacterAdded:Connect(refreshCharacter)
 
@@ -48,39 +43,13 @@ local function pivotCharacter(cf)
 	end
 end
 
--- 灾难关键词扫描（中英文都带）
-local disasterKeywords = {
-	"tornado", "龙卷风", "flood", "洪水", "earthquake", "地震", "meteor", "陨石",
-	"volcano", "火山", "blizzard", "暴风雪", "storm", "风暴", "sandstorm", "沙尘暴",
-	"thunder", "雷", "acid", "酸雨", "tsunami", "海啸", "fire", "火灾",
-	"slide", "滑坡", "rain", "雨"
-}
-
-local function scanForDisaster()
-	local names = {}
-
-	for _, obj in ipairs(workspace:GetChildren()) do
-		table.insert(names, string.lower(obj.Name))
+-- 读取游戏预留给玩家的下一个灾难（SurvivalTag）
+local function getNextDisaster()
+	local tag = Character and Character:FindFirstChild("SurvivalTag")
+	if tag then
+		return tostring(tag.Value)
 	end
-
-	for _, obj in ipairs(workspace:GetDescendants()) do
-		if obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox") then
-			local text = tostring(obj.Text or "")
-			if text ~= "" then
-				table.insert(names, string.lower(text))
-			end
-		end
-	end
-
-	for _, name in ipairs(names) do
-		for _, keyword in ipairs(disasterKeywords) do
-			if string.find(name, keyword, 1, true) then
-				return name
-			end
-		end
-	end
-
-	return "未知"
+	return nil
 end
 
 local win = WindUI:CreateWindow({
@@ -146,30 +115,28 @@ tab:Toggle({
 	end
 })
 
--- 自动检测灾难
+-- 预测灾害
 local AutoDetect = false
 tab:Toggle({
-	Title = "自动检测灾难", Desc = "扫描地图检测灾难并通知", Type = "Checkbox", Value = false,
+	Title = "预测灾害", Desc = "读取 SurvivalTag 预测下一个灾难", Type = "Checkbox", Value = false,
 	Callback = function(v)
 		AutoDetect = v
 		if v then
-			print("[灾难检测] 已开启，当前扫描结果:", scanForDisaster())
+			print("[灾害预测] 已开启，当前:", tostring(getNextDisaster()))
 			task.spawn(function()
-				local last = ""
+				local last = nil
 				while AutoDetect do
-					local detected = scanForDisaster()
-					if detected ~= last then
-						last = detected
-						if detected ~= "未知" then
-							print("[灾难检测] 检测到:", detected)
-							pcall(function()
-								game:GetService("StarterGui"):SetCore("SendNotification", {
-									Title = "检测到灾难",
-									Text = tostring(detected),
-									Duration = 5
-								})
-							end)
-						end
+					local nextDisaster = getNextDisaster()
+					if nextDisaster and nextDisaster ~= last then
+						last = nextDisaster
+						print("[灾害预测] 下一个灾难:", nextDisaster)
+						pcall(function()
+							game:GetService("StarterGui"):SetCore("SendNotification", {
+								Title = "下一个灾难",
+								Text = nextDisaster,
+								Duration = 5
+							})
+						end)
 					end
 					task.wait(1)
 				end
@@ -178,35 +145,37 @@ tab:Toggle({
 	end
 })
 
--- 无摔落伤害
+-- 无摔落伤害（直接移除游戏自带的 FallDamageScript）
 local NoFallDamage = false
+local noFallConn = nil
+
+local function disableFallDamage(char)
+	pcall(function()
+		local fd = char and char:FindFirstChild("FallDamageScript")
+		if fd then
+			fd:Destroy()
+		end
+	end)
+end
+
 tab:Toggle({
-	Title = "无摔落伤害", Desc = "下落不受伤", Type = "Checkbox", Value = false,
+	Title = "无摔落伤害", Desc = "移除游戏自带的摔落伤害脚本", Type = "Checkbox", Value = false,
 	Callback = function(v)
 		NoFallDamage = v
-	end
-})
-
--- 快落地时才清零垂直速度，避免高空清零导致穿地板
-local RayParams = RaycastParams.new()
-RayParams.FilterType = Enum.RaycastFilterType.Exclude
-RayParams.FilterDescendantsInstances = {Character}
-lp.CharacterAdded:Connect(function(char)
-	RayParams.FilterDescendantsInstances = {char}
-end)
-
-RunService.Heartbeat:Connect(function()
-	if not NoFallDamage then return end
-	if HumanoidRootPart and HumanoidRootPart.Parent then
-		local velocity = HumanoidRootPart.AssemblyLinearVelocity
-		if velocity.Y < -30 then
-			local hit = workspace:Raycast(HumanoidRootPart.Position, Vector3.new(0, -18, 0), RayParams)
-			if hit then
-				HumanoidRootPart.AssemblyLinearVelocity = Vector3.new(velocity.X, 0, velocity.Z)
+		if v then
+			disableFallDamage(Character)
+			if not noFallConn then
+				noFallConn = lp.CharacterAdded:Connect(function(char)
+					task.wait(0.2)
+					disableFallDamage(char)
+				end)
 			end
+		elseif noFallConn then
+			noFallConn:Disconnect()
+			noFallConn = nil
 		end
 	end
-end)
+})
 
 WindUI:Notify({
 	Title = "自然灾害", Content = "功能脚本已加载", Icon = "aperture", Duration = 3
