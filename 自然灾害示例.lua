@@ -70,6 +70,35 @@ Tab:Button({
 	end
 })
 
+-- 灾难名中英对照
+local disasterNames = {
+	tornado = "龙卷风",
+	flood = "洪水",
+	earthquake = "地震",
+	meteor = "陨石",
+	volcano = "火山",
+	blizzard = "暴风雪",
+	storm = "风暴",
+	sandstorm = "沙尘暴",
+	thunder = "雷暴",
+	["acid rain"] = "酸雨",
+	tsunami = "海啸",
+	fire = "火灾",
+	landslide = "山体滑坡",
+	rain = "大雨",
+	hurricane = "飓风",
+	hailstorm = "冰雹",
+	wildfire = "野火",
+	lightning = "闪电",
+	heatwave = "热浪",
+	snowstorm = "暴风雪",
+}
+
+local function translateDisaster(name)
+	local key = string.lower(tostring(name or ""))
+	return disasterNames[key] or name
+end
+
 -- 预测灾害
 local AutoDetect = false
 local updateDisasterText
@@ -89,8 +118,9 @@ Tab:Toggle({
 					local nextDisaster = getNext()
 					if nextDisaster and nextDisaster ~= last then
 						last = nextDisaster
-						updateDisasterText("下一个灾难：" .. nextDisaster)
-						notify("下一个灾难", nextDisaster)
+						local cn = translateDisaster(nextDisaster)
+						updateDisasterText("下一个灾难：" .. cn)
+						notify("下一个灾难", cn)
 					end
 					task.wait(1)
 				end
@@ -99,26 +129,10 @@ Tab:Toggle({
 	end
 })
 
--- 直接修改预测灾害按钮自己的描述文本
--- 结构：Tab.UIElements.ContainerFrame -> ToggleFrame -> Desc (TextLabel)
-local descLabel
-do
-	local container = Tab.UIElements and Tab.UIElements.ContainerFrame
-	if container then
-		for _, frame in ipairs(container:GetChildren()) do
-			if frame.Name == "ToggleFrame" then
-				local title = frame:FindFirstChild("Title", true)
-				if title and title.Text == "预测灾害" then
-					descLabel = frame:FindFirstChild("Desc", true)
-					break
-				end
-			end
-		end
-	end
-end
-
+-- 开关下方实时显示当前预测（Paragraph 的 SetDesc 可用）
+local disasterText = Tab:Paragraph({ Title = "当前预测", Desc = "等待检测..." })
 updateDisasterText = function(text)
-	if descLabel then
-		descLabel.Text = text
+	if disasterText and disasterText.SetDesc then
+		disasterText:SetDesc(text)
 	end
 end
