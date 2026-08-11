@@ -50,25 +50,29 @@ local function setWindowVisible(visible)
 				if content then
 					content.Visible = true
 				end
-				PopScale.Scale = 0.92
-				popTween = TweenService:Create(PopScale, TweenInfo.new(0.16, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 })
+				PopScale.Scale = 0.88
+				popTween = TweenService:Create(PopScale, TweenInfo.new(0.22, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 })
 				popTween:Play()
 			else
-				popTween = TweenService:Create(PopScale, TweenInfo.new(0.08, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Scale = 0.96 })
+				popTween = TweenService:Create(PopScale, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Scale = 0.96 })
 				popTween.Completed:Connect(function()
-					pcall(function()
-						win.UIElements.Main.Visible = false
-						local content = win.UIElements.Main:FindFirstChild("Main")
-						if content then
-							content.Visible = false
-						end
-					end)
+					if win.Closed then
+						pcall(function()
+							win.UIElements.Main.Visible = false
+							local content = win.UIElements.Main:FindFirstChild("Main")
+							if content then
+								content.Visible = false
+							end
+						end)
+					end
 				end)
 				popTween:Play()
-				task.delay(0.15, function()
-					pcall(function()
-						win.UIElements.Main.Visible = false
-					end)
+				task.delay(0.18, function()
+					if win.Closed then
+						pcall(function()
+							win.UIElements.Main.Visible = false
+						end)
+					end
 				end)
 			end
 		end
