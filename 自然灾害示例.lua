@@ -14,6 +14,7 @@ end
 
 local Players = game:GetService("Players")
 local StarterGui = game:GetService("StarterGui")
+local WindUI = getgenv().WindUI
 local lp = Players.LocalPlayer
 
 local Character = lp.Character or lp.CharacterAdded:Wait()
@@ -22,11 +23,17 @@ lp.CharacterAdded:Connect(function(char)
 end)
 
 local function notify(title, text)
-	pcall(function()
-		StarterGui:SetCore("SendNotification", {
-			Title = title, Text = text or "", Duration = 4
-		})
-	end)
+	if WindUI and WindUI.Notify then
+		pcall(function()
+			WindUI:Notify({ Title = title, Content = text or "", Duration = 4, Icon = "bell" })
+		end)
+	else
+		pcall(function()
+			StarterGui:SetCore("SendNotification", {
+				Title = title, Text = text or "", Duration = 4
+			})
+		end)
+	end
 end
 
 local function run(url, name)
@@ -65,7 +72,7 @@ Tab:Button({
 
 -- 预测灾害
 local AutoDetect = false
-Tab:Toggle({
+local detectToggle = Tab:Toggle({
 	Title = "预测灾害", Desc = "读取 SurvivalTag 预测下一个灾难", Icon = "zap", Type = "Checkbox", Value = false,
 	Callback = function(v)
 		AutoDetect = v
@@ -74,14 +81,15 @@ Tab:Toggle({
 				local tag = Character and Character:FindFirstChild("SurvivalTag")
 				return tag and tostring(tag.Value) or nil
 			end
-			print("[灾害预测] 已开启，当前:", tostring(getNext()))
 			task.spawn(function()
 				local last = nil
 				while AutoDetect do
 					local nextDisaster = getNext()
 					if nextDisaster and nextDisaster ~= last then
 						last = nextDisaster
-						print("[灾害预测] 下一个灾难:", nextDisaster)
+						if detectToggle.SetDesc then
+							detectToggle:SetDesc("下一个灾难：" .. nextDisaster)
+						end
 						notify("下一个灾难", nextDisaster)
 					end
 					task.wait(1)
@@ -90,5 +98,3 @@ Tab:Toggle({
 		end
 	end
 })
-
-print("[自然灾害] 远程脚本加载完成")
