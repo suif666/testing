@@ -72,7 +72,9 @@ Tab:Button({
 
 -- 预测灾害
 local AutoDetect = false
-local detectToggle = Tab:Toggle({
+local updateDisasterText
+
+Tab:Toggle({
 	Title = "预测灾害", Desc = "读取 SurvivalTag 预测下一个灾难", Icon = "zap", Type = "Checkbox", Value = false,
 	Callback = function(v)
 		AutoDetect = v
@@ -87,9 +89,7 @@ local detectToggle = Tab:Toggle({
 					local nextDisaster = getNext()
 					if nextDisaster and nextDisaster ~= last then
 						last = nextDisaster
-						if detectToggle.SetDesc then
-							detectToggle:SetDesc("下一个灾难：" .. nextDisaster)
-						end
+						updateDisasterText("下一个灾难：" .. nextDisaster)
 						notify("下一个灾难", nextDisaster)
 					end
 					task.wait(1)
@@ -98,3 +98,27 @@ local detectToggle = Tab:Toggle({
 		end
 	end
 })
+
+-- 直接修改预测灾害按钮自己的描述文本
+-- 结构：Tab.UIElements.ContainerFrame -> ToggleFrame -> Desc (TextLabel)
+local descLabel
+do
+	local container = Tab.UIElements and Tab.UIElements.ContainerFrame
+	if container then
+		for _, frame in ipairs(container:GetChildren()) do
+			if frame.Name == "ToggleFrame" then
+				local title = frame:FindFirstChild("Title", true)
+				if title and title.Text == "预测灾害" then
+					descLabel = frame:FindFirstChild("Desc", true)
+					break
+				end
+			end
+		end
+	end
+end
+
+updateDisasterText = function(text)
+	if descLabel then
+		descLabel.Text = text
+	end
+end
