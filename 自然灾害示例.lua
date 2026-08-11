@@ -70,33 +70,62 @@ Tab:Button({
 	end
 })
 
--- 灾难名中英对照
+-- 灾难名中英对照（覆盖游戏全部灾害 + 常见变体）
 local disasterNames = {
 	tornado = "龙卷风",
 	flood = "洪水",
 	earthquake = "地震",
 	meteor = "陨石",
+	["meteor shower"] = "陨石雨",
 	volcano = "火山",
+	["volcanic eruption"] = "火山喷发",
 	blizzard = "暴风雪",
 	storm = "风暴",
+	thunderstorm = "雷暴",
 	sandstorm = "沙尘暴",
 	thunder = "雷暴",
 	["acid rain"] = "酸雨",
+	acid = "酸雨",
 	tsunami = "海啸",
 	fire = "火灾",
+	firestorm = "火风暴",
+	wildfire = "野火",
 	landslide = "山体滑坡",
+	mudslide = "泥石流",
 	rain = "大雨",
+	["heavy rain"] = "暴雨",
 	hurricane = "飓风",
 	hailstorm = "冰雹",
-	wildfire = "野火",
+	hail = "冰雹",
 	lightning = "闪电",
+	["lightning storm"] = "闪电风暴",
 	heatwave = "热浪",
+	["heat wave"] = "热浪",
 	snowstorm = "暴风雪",
+	snow = "暴雪",
+	["dust storm"] = "沙尘暴",
 }
+
+-- 长关键词优先，模糊匹配兜底（处理大小写/多余字符）
+local disasterKeys = {}
+for k in pairs(disasterNames) do
+	table.insert(disasterKeys, k)
+end
+table.sort(disasterKeys, function(a, b)
+	return #a > #b
+end)
 
 local function translateDisaster(name)
 	local key = string.lower(tostring(name or ""))
-	return disasterNames[key] or name
+	if disasterNames[key] then
+		return disasterNames[key]
+	end
+	for _, kw in ipairs(disasterKeys) do
+		if string.find(key, kw, 1, true) then
+			return disasterNames[kw]
+		end
+	end
+	return name
 end
 
 -- 预测灾害
