@@ -78,14 +78,34 @@ local function highlightObject(obj, color, name)
 		h.Adornee = p
 		h.FillColor = color
 		h.OutlineColor = Color3.new(1, 1, 1)
-		h.FillTransparency = 0.5
+		h.FillTransparency = 0.3
 		h.OutlineTransparency = 0
 		h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
 		h.Parent = HighlightFolder
 	end
 
-	-- 文字标签
-	local anchor = obj:IsA("Model") and obj.PrimaryPart or parts[1]
+	-- 文字标签：优先 PrimaryPart，否则取所有部件的包围盒中心附近的部件
+	local anchor = obj:IsA("Model") and obj.PrimaryPart or nil
+	if not anchor then
+		local center = parts[1].Position
+		if #parts > 1 then
+			local minP, maxP = parts[1].Position, parts[1].Position
+			for _, p in ipairs(parts) do
+				minP = Vector3.new(math.min(minP.X, p.Position.X), math.min(minP.Y, p.Position.Y), math.min(minP.Z, p.Position.Z))
+				maxP = Vector3.new(math.max(maxP.X, p.Position.X), math.max(maxP.Y, p.Position.Y), math.max(maxP.Z, p.Position.Z))
+			end
+			center = (minP + maxP) / 2
+		end
+		anchor = parts[1]
+		local bestDist = (anchor.Position - center).Magnitude
+		for _, p in ipairs(parts) do
+			local d = (p.Position - center).Magnitude
+			if d < bestDist then
+				anchor = p
+				bestDist = d
+			end
+		end
+	end
 	if anchor then
 		local bill = Instance.new("BillboardGui")
 		bill.Name = name .. "_Text"
@@ -117,6 +137,8 @@ local ESP = {
 	Normal = false,
 	Monster = false,
 	Rainbow = false,
+	Item = false,
+	Vending = false,
 }
 
 -- ==================== UI ====================
@@ -187,6 +209,18 @@ espTab:Toggle({
 espTab:Toggle({
 	Title = "彩虹高亮", Desc = "高亮 EnchantedGiver 及其同类对象", Type = "Checkbox", Value = false,
 	Callback = function(v) ESP.Rainbow = v end
+})
+
+-- ESP：物品（Objects[20] 及其同名对象）
+espTab:Toggle({
+	Title = "物品高亮", Desc = "高亮 Objects[20] 及其同名对象", Type = "Checkbox", Value = false,
+	Callback = function(v) ESP.Item = v end
+})
+
+-- ESP：售货机（VendingMachine.Visual）
+espTab:Toggle({
+	Title = "售货机高亮", Desc = "高亮 VendingMachine.Visual", Type = "Checkbox", Value = false,
+	Callback = function(v) ESP.Vending = v end
 })
 
 -- 夜视
@@ -275,6 +309,35 @@ local function getMonsterCandidates()
 	return list
 end
 
+local function getItemCandidates()
+	local objs = getObjects()
+	local ref = objs and objs:GetChildren()[20]
+	if not objs or not ref then return {} end
+	local name = ref.Name
+	local list = {}
+	for _, child in ipairs(objs:GetChildren()) do
+		if child.Name == name then
+			table.insert(list, child)
+		end
+	end
+	return list
+end
+
+local function getVendingCandidates()
+	local objs = getObjects()
+	if not objs then return {} end
+	local list = {}
+	for _, child in ipairs(objs:GetChildren()) do
+		if string.find(string.lower(child.Name), "vendingmachine", 1, true) then
+			local visual = child:FindFirstChild("Visual")
+			if visual then
+				table.insert(list, visual)
+			end
+		end
+	end
+	return list
+end
+
 local function buildSignature()
 	local objs = getObjects()
 	local map = workspace:FindFirstChild("Map")
@@ -298,6 +361,18 @@ local function buildSignature()
 		sig = sig .. "R0"
 	end
 
+	if ESP.Item and objs then
+		sig = sig .. ("I" .. #getItemCandidates())
+	else
+		sig = sig .. "I0"
+	end
+
+	if ESP.Vending and objs then
+		sig = sig .. ("V" .. #getVendingCandidates())
+	else
+		sig = sig .. "V0"
+	end
+
 	return sig
 end
 
@@ -313,13 +388,25 @@ local function applyHighlights()
 
 	if ESP.Monster and objs then
 		for _, obj in ipairs(getMonsterCandidates()) do
-			highlightObject(obj:FindFirstChild("HITBOX"), Color3.fromRGB(255, 70, 70), "怪")
+			highlightObject(obj, Color3.fromRGB(255, 70, 70), "怪")
 		end
 	end
 
 	if ESP.Rainbow then
 		for _, obj in ipairs(getRainbowCandidates()) do
 			highlightObject(obj, Color3.fromRGB(255, 0, 255), "彩虹")
+		end
+	end
+
+	if ESP.Item and objs then
+		for _, obj in ipairs(getItemCandidates()) do
+			highlightObject(obj, Color3.fromRGB(255, 200, 0), "物品")
+		end
+	end
+
+	if ESP.Vending and objs then
+		for _, obj in ipairs(getVendingCandidates()) do
+			highlightObject(obj, Color3.fromRGB(0, 200, 255), "售货机")
 		end
 	end
 end
