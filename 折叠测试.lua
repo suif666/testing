@@ -1,136 +1,172 @@
--- WindUI 折叠演示
--- 左侧边栏：窗口级 Section（标签分组）折叠
--- 右侧内容区：Tab 级 Section（元素分组）折叠
--- 用法：直接复制进注入器执行，会从 GitHub 在线加载 WindUI
+-- UI 过渡测试（位移 + 遮罩淡入淡出）独立脚本
 
 local WindUI
 do
-    local ok, res = pcall(function()
-        local source = game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua")
-        local fn, compileErr = loadstring(source)
-        if not fn then
-            error(compileErr)
-        end
-        return fn()
-    end)
-
-    if not ok or not res then
-        warn("WindUI 加载失败，脚本已停止:", res)
-        return
-    end
-    WindUI = res
+	local ok, res = pcall(function()
+		local source = game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua")
+		local fn, compileErr = loadstring(source)
+		if not fn then
+			error(compileErr)
+		end
+		return fn()
+	end)
+	if not ok or not res then
+		warn("WindUI 加载失败:", res)
+		return
+	end
+	WindUI = res
 end
+
+local TweenService = game:GetService("TweenService")
+local lp = game:GetService("Players").LocalPlayer
 
 local win = WindUI:CreateWindow({
-    Title = "折叠演示",
-    Icon = "aperture",
-    Author = "demo",
-    Folder = "CollapseDemo",
-    Size = UDim2.fromOffset(620, 460),
-    MinSize = Vector2.new(560, 350),
-    MaxSize = Vector2.new(900, 600),
-    Resizable = true,
-    Transparent = true,
-    Theme = "Dark",
-    SideBarWidth = 180,
-    HideSearchBar = false,
-    ScrollBarEnabled = true,
-    NewElements = true,
+	Title = "过渡测试", Icon = "aperture", Author = "by suif", Folder = "SutureHub",
+	Size = UDim2.fromOffset(620, 460), MinSize = Vector2.new(560, 350), MaxSize = Vector2.new(900, 600),
+	ToggleKey = Enum.KeyCode.RightShift, Transparent = true, Theme = "Dark",
+	Resizable = true, SideBarWidth = 160, HideSearchBar = true,
+	ScrollBarEnabled = true, NewElements = true,
+	User = { Enabled = true, Anonymous = false, Callback = function() print("当前用户:", lp.Name) end }
 })
 
--- ==================== 左侧边栏：窗口级 Section ====================
--- win:Section 创建“标签分组”，标题栏右侧的小三角就是折叠按钮。
--- Opened = true 初始展开，Opened = false 初始收起。
-local gameSec = win:Section({ Title = "游戏功能", Icon = "folder", Opened = true })
-local playerTab = gameSec:Tab({ Title = "玩家", Icon = "user" })
-local visualTab = gameSec:Tab({ Title = "视觉", Icon = "palette" })
-local fightTab = gameSec:Tab({ Title = "战斗", Icon = "swords" })
+-- ============ 过渡：位移 + 全屏遮罩淡入淡出 ============
+local mainParent = win.UIElements.Main.Parent
 
-local scriptSec = win:Section({ Title = "脚本库", Icon = "folder", Opened = false })
-local feTab = scriptSec:Tab({ Title = "Fe脚本", Icon = "shell" })
-local toolTab = scriptSec:Tab({ Title = "工具", Icon = "wrench" })
+-- 全屏遮罩（放在窗口后面）
+local DimOverlay = Instance.new("Frame")
+DimOverlay.Name = "SutureDimOverlay"
+DimOverlay.Size = UDim2.fromScale(1, 1)
+DimOverlay.BackgroundColor3 = Color3.new(0, 0, 0)
+DimOverlay.BackgroundTransparency = 1
+DimOverlay.BorderSizePixel = 0
+DimOverlay.ZIndex = 0
+DimOverlay.Parent = mainParent
 
-local aboutSec = win:Section({ Title = "关于", Icon = "info", Opened = true })
-local aboutTab = aboutSec:Tab({ Title = "说明", Icon = "book-open" })
+local SLIDE = 24 -- 下滑像素
+local lastPos = nil
+local posTween = nil
+local dimTween = nil
 
--- ==================== 右侧内容区：Tab 级 Section ====================
--- tab:Section 创建“元素分组”，同样支持小三角折叠。
-playerTab:Select()
+local function setWindowVisible(visible)
+	pcall(function()
+		if not (win.UIElements and win.UIElements.Main) then return end
+		if posTween then posTween:Cancel() posTween = nil end
+		if dimTween then dimTween:Cancel() dimTween = nil end
 
-local function demoSection(tab, title, icon, opened)
-    return tab:Section({ Title = title, Icon = icon, Opened = opened })
+		if visible then
+			local target = lastPos or UDim2.new(0.5, 0, 0.5, 0)
+			win.UIElements.Main.Visible = true
+			local content = win.UIElements.Main:FindFirstChild("Main")
+			if content then content.Visible = true end
+
+			-- 从下方 24px 滑回原位
+			win.UIElements.Main.Position = UDim2.new(target.X.Scale, target.X.Offset, target.Y.Scale, target.Y.Offset + SLIDE)
+			posTween = TweenService:Create(win.UIElements.Main, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Position = target })
+			posTween:Play()
+
+			-- 遮罩淡入
+			DimOverlay.Visible = true
+			dimTween = TweenService:Create(DimOverlay, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 0.5 })
+			dimTween:Play()
+
+			-- 保险：tween 没生效也强制还原
+			task.delay(0.3, function()
+				pcall(function()
+					if win.UIElements and win.UIElements.Main then
+						win.UIElements.Main.Position = target
+					end
+				end)
+			end)
+		else
+			lastPos = win.UIElements.Main.Position
+			local target = UDim2.new(lastPos.X.Scale, lastPos.X.Offset, lastPos.Y.Scale, lastPos.Y.Offset + SLIDE)
+
+			posTween = TweenService:Create(win.UIElements.Main, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Position = target })
+			posTween.Completed:Connect(function()
+				if win.Closed then
+					pcall(function()
+						win.UIElements.Main.Visible = false
+						local content = win.UIElements.Main:FindFirstChild("Main")
+						if content then content.Visible = false end
+					end)
+				end
+			end)
+			posTween:Play()
+
+			dimTween = TweenService:Create(DimOverlay, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { BackgroundTransparency = 1 })
+			dimTween.Completed:Connect(function()
+				if win.Closed then
+					DimOverlay.Visible = false
+				end
+			end)
+			dimTween:Play()
+
+			-- 保险：tween 没跑完也强制隐藏
+			task.delay(0.25, function()
+				if win.Closed then
+					pcall(function()
+						win.UIElements.Main.Visible = false
+					end)
+					DimOverlay.Visible = false
+				end
+			end)
+		end
+	end)
 end
 
-local baseSec = demoSection(playerTab, "基础设置", "settings", true)
-baseSec:Paragraph({
-    Title = "说明",
-    Desc = "右侧这些分组和左边一样\n点击标题栏小三角即可折叠",
-})
-baseSec:Toggle({
-    Title = "示例开关",
-    Desc = "Toggle 演示",
-    Value = true,
-    Callback = function(v)
-        print("开关:", v)
-    end,
-})
-baseSec:Slider({
-    Title = "示例滑条",
-    Step = 1,
-    Value = { Min = 0, Max = 100, Default = 50 },
-    Callback = function(v)
-        print("滑条:", v)
-    end,
-})
+function win:Open(...)
+	if win.Destroyed then return end
+	if win.OnOpenCallback then
+		task.spawn(function() pcall(win.OnOpenCallback) end)
+	end
+	win.Closed = false
+	win.CanDropdown = true
+	win.CanResize = win.Resizable ~= false
+	setWindowVisible(true)
+	if win.OpenButtonMain and win.IsOpenButtonEnabled then
+		pcall(function() win.OpenButtonMain:Visible(false) end)
+	end
+end
 
-local advSec = demoSection(playerTab, "高级选项", "sliders-horizontal", false)
-advSec:Dropdown({
-    Title = "选择模式",
-    Values = { "模式A", "模式B", "模式C" },
-    Value = "模式A",
-    Callback = function(v)
-        print("下拉:", v)
-    end,
-})
-advSec:Button({
-    Title = "执行按钮",
-    Desc = "点击后打印",
-    Callback = function()
-        print("按钮被点击")
-    end,
-})
+function win:Close(...)
+	if win.Destroyed then return end
+	if win.OnCloseCallback then
+		task.spawn(function() pcall(win.OnCloseCallback) end)
+	end
+	win.Closed = true
+	win.CanDropdown = false
+	setWindowVisible(false)
+	if win.OpenButtonMain and win.IsOpenButtonEnabled then
+		pcall(function() win.OpenButtonMain:Visible(true) end)
+	end
+end
+-- ==============================================================
 
--- 视觉标签页：再演示一组右侧折叠
-local visualSec = visualTab:Section({ Title = "显示设置", Icon = "palette", Opened = true })
-visualSec:Toggle({
-    Title = "显示FPS",
-    Value = false,
-    Callback = function(v)
-        print("显示FPS:", v)
-    end,
-})
-visualSec:Dropdown({
-    Title = "位置",
-    Values = { "左上", "右上", "左下", "右下" },
-    Value = "右上",
-    Callback = function(v)
-        print("位置:", v)
-    end,
-})
+local tab1 = win:Tab({ Title = "功能一", Icon = "user", Locked = false })
+local tab2 = win:Tab({ Title = "功能二", Icon = "user", Locked = false })
+tab1:Select()
 
--- 战斗/Fe脚本/工具标签页给点内容，避免空白
-fightTab:Paragraph({ Title = "战斗", Desc = "留空示例" })
-feTab:Paragraph({ Title = "Fe脚本", Desc = "留空示例" })
-toolTab:Paragraph({ Title = "工具", Desc = "留空示例" })
+for _, tab in ipairs({tab1, tab2}) do
+	for i = 1, 20 do
+		tab:Button({
+			Title = "测试按钮 " .. i, Desc = "压测按钮", Icon = "shell",
+			Callback = function() end
+		})
+	end
+	for i = 1, 5 do
+		tab:Toggle({
+			Title = "测试开关 " .. i, Desc = "开关描述", Type = "Checkbox", Value = false,
+			Callback = function() end
+		})
+	end
+	tab:Slider({
+		Title = "测试拉条", Step = 1, Value = { Min = 0, Max = 100, Default = 50 },
+		Callback = function() end
+	})
+	tab:Slider({
+		Title = "测试拉条2", Step = 1, Value = { Min = 0, Max = 100, Default = 30 },
+		Callback = function() end
+	})
+end
 
-aboutTab:Paragraph({
-    Title = "折叠演示",
-    Desc = "左侧：窗口级 Section 折叠标签组\n右侧：Tab 级 Section 折叠元素组\n\n初始展开/收起由 Opened 参数控制",
-})
-
-WindUI:Notify({
-    Title = "折叠演示",
-    Content = "加载完成！试试左右两侧的小三角",
-    Icon = "aperture",
-    Duration = 4,
-})
+print("[过渡测试] 已加载，按 RightShift 开关窗口")
