@@ -29,6 +29,13 @@ local win = WindUI:CreateWindow({
 	User = { Enabled = true, Anonymous = false, Callback = function() print("当前用户:", lp.Name) end }
 })
 
+-- 顶栏彻底关闭按钮（销毁整个 UI，包括悬浮开合按钮）
+pcall(function()
+	win:CreateTopbarButton("SutureClose", "x", function()
+		pcall(function() win:Destroy() end)
+	end, 999)
+end)
+
 -- ============ 过渡：位移 + 全屏遮罩淡入淡出 ============
 local mainParent = win.UIElements.Main.Parent
 
@@ -42,7 +49,7 @@ DimOverlay.BorderSizePixel = 0
 DimOverlay.ZIndex = 0
 DimOverlay.Parent = mainParent
 
-local SLIDE = 24 -- 下滑像素
+local SLIDE = 20 -- 下滑像素
 local lastPos = nil
 local posTween = nil
 local dimTween = nil
@@ -61,12 +68,12 @@ local function setWindowVisible(visible)
 
 			-- 从下方 24px 滑回原位
 			win.UIElements.Main.Position = UDim2.new(target.X.Scale, target.X.Offset, target.Y.Scale, target.Y.Offset + SLIDE)
-			posTween = TweenService:Create(win.UIElements.Main, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Position = target })
+			posTween = TweenService:Create(win.UIElements.Main, TweenInfo.new(0.22, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { Position = target })
 			posTween:Play()
 
 			-- 遮罩淡入
 			DimOverlay.Visible = true
-			dimTween = TweenService:Create(DimOverlay, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 0.5 })
+			dimTween = TweenService:Create(DimOverlay, TweenInfo.new(0.22, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { BackgroundTransparency = 0.55 })
 			dimTween:Play()
 
 			-- 保险：tween 没生效也强制还原
@@ -81,7 +88,7 @@ local function setWindowVisible(visible)
 			lastPos = win.UIElements.Main.Position
 			local target = UDim2.new(lastPos.X.Scale, lastPos.X.Offset, lastPos.Y.Scale, lastPos.Y.Offset + SLIDE)
 
-			posTween = TweenService:Create(win.UIElements.Main, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Position = target })
+			posTween = TweenService:Create(win.UIElements.Main, TweenInfo.new(0.16, Enum.EasingStyle.Quint, Enum.EasingDirection.In), { Position = target })
 			posTween.Completed:Connect(function()
 				if win.Closed then
 					pcall(function()
@@ -93,7 +100,7 @@ local function setWindowVisible(visible)
 			end)
 			posTween:Play()
 
-			dimTween = TweenService:Create(DimOverlay, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { BackgroundTransparency = 1 })
+			dimTween = TweenService:Create(DimOverlay, TweenInfo.new(0.16, Enum.EasingStyle.Quint, Enum.EasingDirection.In), { BackgroundTransparency = 1 })
 			dimTween.Completed:Connect(function()
 				if win.Closed then
 					DimOverlay.Visible = false
@@ -102,7 +109,7 @@ local function setWindowVisible(visible)
 			dimTween:Play()
 
 			-- 保险：tween 没跑完也强制隐藏
-			task.delay(0.25, function()
+			task.delay(0.2, function()
 				if win.Closed then
 					pcall(function()
 						win.UIElements.Main.Visible = false
@@ -136,7 +143,8 @@ function win:Close(...)
 	win.Closed = true
 	win.CanDropdown = false
 	setWindowVisible(false)
-	if win.OpenButtonMain and win.IsOpenButtonEnabled then
+	-- PC 上关闭后不显示悬浮开合按钮（彻底关掉），移动端保留方便重开
+	if win.OpenButtonMain and win.IsOpenButtonEnabled and win.IsPC == false then
 		pcall(function() win.OpenButtonMain:Visible(true) end)
 	end
 end
