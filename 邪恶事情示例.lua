@@ -387,5 +387,3 @@ if WindUI and WindUI.Notify then
 		WindUI:Notify({ Title = "游戏辅助", Content = "远程脚本已加载", Icon = "aperture", Duration = 2 })
 	end)
 end
-
-print("[游戏辅助] 远程脚本加载完成")
