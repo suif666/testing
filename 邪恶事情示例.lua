@@ -222,28 +222,9 @@ espTab:Toggle({
 })
 
 -- ==================== ESP 循环（条件不满足自动停） ====================
--- 按参考对象的结构精确匹配同类（普通参考 = Objects.Giver，彩虹参考 = Objects[12]）
-local function childNameSet(obj)
-	local set = {}
-	if obj then
-		for _, c in ipairs(obj:GetChildren()) do
-			set[c.Name] = true
-		end
-	end
-	return set
-end
-
-local function sameType(a, b)
-	if not a or not b then return false end
-	if a.ClassName ~= b.ClassName then return false end
-	local sa, sb = childNameSet(a), childNameSet(b)
-	for k in pairs(sa) do
-		if not sb[k] then return false end
-	end
-	for k in pairs(sb) do
-		if not sa[k] then return false end
-	end
-	return true
+-- 判定规则：目标物品都带 Handle 子结构，候选 = 同类名 + 存在 Handle
+local function hasHandle(obj)
+	return obj ~= nil and obj:FindFirstChild("Handle", true) ~= nil
 end
 
 local function getNormalCandidates()
@@ -252,7 +233,7 @@ local function getNormalCandidates()
 	if not objs or not ref then return {} end
 	local list = {}
 	for _, child in ipairs(objs:GetChildren()) do
-		if sameType(child, ref) then
+		if child.ClassName == ref.ClassName and hasHandle(child) then
 			table.insert(list, child)
 		end
 	end
@@ -265,7 +246,7 @@ local function getRainbowCandidates()
 	if not objs or not ref then return {} end
 	local list = {}
 	for _, child in ipairs(objs:GetChildren()) do
-		if sameType(child, ref) then
+		if child.ClassName == ref.ClassName and hasHandle(child) then
 			table.insert(list, child)
 		end
 	end
@@ -290,9 +271,7 @@ local function buildSignature()
 	local sig = ""
 
 	if ESP.Normal and objs then
-		local dep = objs:GetChildren()[23]
-		local handle = dep and dep:FindFirstChild("Visual") and dep.Visual:FindFirstChild("Handle")
-		sig = sig .. (handle and ("N" .. #getNormalCandidates()) or "N0")
+		sig = sig .. ("N" .. #getNormalCandidates())
 	else
 		sig = sig .. "N0"
 	end
@@ -304,10 +283,7 @@ local function buildSignature()
 	end
 
 	if ESP.Rainbow then
-		local objs2 = getObjects()
-		local ref = objs2 and (objs2:FindFirstChild("EnchantedGiver") or objs2:GetChildren()[12])
-		local dep = ref and ref:FindFirstChild("Visual") and ref.Visual:FindFirstChild("Handle")
-		sig = sig .. (dep and ("R" .. #getRainbowCandidates()) or "R0")
+		sig = sig .. ("R" .. #getRainbowCandidates())
 	else
 		sig = sig .. "R0"
 	end
@@ -320,12 +296,8 @@ local function applyHighlights()
 	local map = workspace:FindFirstChild("Map")
 
 	if ESP.Normal and objs then
-		local dep = objs:GetChildren()[23]
-		local handle = dep and dep:FindFirstChild("Visual") and dep.Visual:FindFirstChild("Handle")
-		if handle then
-			for _, obj in ipairs(getNormalCandidates()) do
-				highlightObject(obj, Color3.fromRGB(0, 255, 90), "普通")
-			end
+		for _, obj in ipairs(getNormalCandidates()) do
+			highlightObject(obj, Color3.fromRGB(0, 255, 90), "普通")
 		end
 	end
 
@@ -336,13 +308,8 @@ local function applyHighlights()
 	end
 
 	if ESP.Rainbow then
-		local objs2 = getObjects()
-		local ref = objs2 and (objs2:FindFirstChild("EnchantedGiver") or objs2:GetChildren()[12])
-		local dep = ref and ref:FindFirstChild("Visual") and ref.Visual:FindFirstChild("Handle")
-		if dep then
-			for _, obj in ipairs(getRainbowCandidates()) do
-				highlightObject(obj, Color3.fromRGB(255, 0, 255), "彩虹")
-			end
+		for _, obj in ipairs(getRainbowCandidates()) do
+			highlightObject(obj, Color3.fromRGB(255, 0, 255), "彩虹")
 		end
 	end
 end
