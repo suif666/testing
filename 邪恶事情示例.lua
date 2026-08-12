@@ -185,7 +185,7 @@ espTab:Toggle({
 
 -- ESP：彩虹（EnchantedGiver.Main，依赖 Visual.Handle 存在）
 espTab:Toggle({
-	Title = "彩虹高亮", Desc = "高亮 Objects[12] 及其同类对象", Type = "Checkbox", Value = false,
+	Title = "彩虹高亮", Desc = "高亮 EnchantedGiver 及其同类对象", Type = "Checkbox", Value = false,
 	Callback = function(v) ESP.Rainbow = v end
 })
 
@@ -222,18 +222,29 @@ espTab:Toggle({
 })
 
 -- ==================== ESP 循环（条件不满足自动停） ====================
--- 判定规则：目标物品都带 Handle 子结构，候选 = 同类名 + 存在 Handle
+-- 判定规则：按名字筛（普通=含 Giver 且非 EnchantedGiver，彩虹=含 EnchantedGiver），
+-- 再判断该物品是否存在 Handle 子结构，存在才高亮
 local function hasHandle(obj)
 	return obj ~= nil and obj:FindFirstChild("Handle", true) ~= nil
 end
 
+local function isNormalName(name)
+	name = string.lower(tostring(name or ""))
+	return string.find(name, "giver", 1, true) ~= nil
+		and string.find(name, "enchantedgiver", 1, true) == nil
+end
+
+local function isRainbowName(name)
+	name = string.lower(tostring(name or ""))
+	return string.find(name, "enchantedgiver", 1, true) ~= nil
+end
+
 local function getNormalCandidates()
 	local objs = getObjects()
-	local ref = objs and objs:FindFirstChild("Giver")
-	if not objs or not ref then return {} end
+	if not objs then return {} end
 	local list = {}
 	for _, child in ipairs(objs:GetChildren()) do
-		if child.ClassName == ref.ClassName and hasHandle(child) then
+		if isNormalName(child.Name) and hasHandle(child) then
 			table.insert(list, child)
 		end
 	end
@@ -242,11 +253,10 @@ end
 
 local function getRainbowCandidates()
 	local objs = getObjects()
-	local ref = objs and (objs:FindFirstChild("EnchantedGiver") or objs:GetChildren()[12])
-	if not objs or not ref then return {} end
+	if not objs then return {} end
 	local list = {}
 	for _, child in ipairs(objs:GetChildren()) do
-		if child.ClassName == ref.ClassName and hasHandle(child) then
+		if isRainbowName(child.Name) and hasHandle(child) then
 			table.insert(list, child)
 		end
 	end
