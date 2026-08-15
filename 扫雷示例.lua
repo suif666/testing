@@ -66,6 +66,16 @@ if not espFolder then
     espFolder.Parent = workspace
 end
 
+-- 路线线锚点（单位矩阵 CFrame 的世界坐标部件，LineHandleAdornment 必须有 BasePart 作 Adornee）
+local routeAnchor = Instance.new("Part")
+routeAnchor.Name = "SutureRouteAnchor"
+routeAnchor.Anchored = true
+routeAnchor.CanCollide = false
+routeAnchor.Transparency = 1
+routeAnchor.Size = Vector3.new(1, 1, 1)
+routeAnchor.CFrame = CFrame.new() -- 原点、单位矩阵，路线点直接用世界坐标
+routeAnchor.Parent = workspace
+
 local function notify(title, content)
     pcall(function()
         WindUI:Notify({ Title = title, Content = content, Icon = "bomb", Duration = 3 })
@@ -910,25 +920,29 @@ end
 local function drawRoute(path)
     clearRouteLine()
     if not path or #path == 0 then return end
+    local ok, err = pcall(function()
+        local points = {}
+        local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+        if root then table.insert(points, root.Position) end
+        for _, p in ipairs(path) do
+            table.insert(points, p.Position)
+        end
+        if #points < 2 then return end
 
-    local points = {}
-    local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-    if root then table.insert(points, root.Position) end
-    for _, p in ipairs(path) do
-        table.insert(points, p.Position)
+        local line = Instance.new("LineHandleAdornment")
+        line.Adornee = routeAnchor -- 世界坐标锚点，点直接用世界坐标
+        line.AlwaysOnTop = true
+        line.Transparency = 0.15
+        line.Color3 = Color3.fromRGB(0, 255, 120)
+        line.Thickness = 3
+        line.LengthUnit = 0.2
+        line.Points = points
+        line.Parent = espFolder
+        routeLine = line
+    end)
+    if not ok then
+        warn("[扫雷] 路线绘制失败:", err)
     end
-    if #points < 2 then return end
-
-    local line = Instance.new("LineHandleAdornment")
-    line.Adornee = workspace.Terrain -- Terrain 的 CFrame 是单位矩阵，点即世界坐标
-    line.AlwaysOnTop = true
-    line.Transparency = 0.15
-    line.Color3 = Color3.fromRGB(0, 255, 120)
-    line.Thickness = 3
-    line.LengthUnit = 0.2
-    line.Points = points
-    line.Parent = espFolder
-    routeLine = line
 end
 
 -- ============================================
@@ -1001,92 +1015,98 @@ task.spawn(function()
             task.wait(0.3)
             continue
         end
-        if not checkGridValid() then
-            initGrid()
-            task.wait(0.1)
-            continue
-        end
-
-        local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-        local pCol, pRow = getCurrentPlayerGrid()
-        if not root or not pCol or not pRow then continue end
-
-        local openedCount = 0
-        for col = 1, W do
-            for row = 1, H do
-                if grid[col][row].isOpened then openedCount = openedCount + 1 end
+        local ok, err = pcall(function()
+            if not checkGridValid() then
+                initGrid()
+                task.wait(0.1)
+                return
             end
-        end
 
-        -- 开局（全盘未翻开）时不做任何移动，等玩家手动翻开第一格后自动走再接管
-        if openedCount > 0 then
-            local key = getSecretKey()
-            if key and not lastDeducedNewBomb then
-                -- 用最新安全格构建一条路线（最多60格），连续走完立即重新规划
-                local route = {}
-                local startCol, startRow = pCol, pRow
-                local remaining = {}
-                for _, cell in pairs(lastSafeTiles or {}) do remaining[cell] = true end
+            local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            local pCol, pRow = getCurrentPlayerGrid()
+            if not root or not pCol or not pRow then return end
 
-                for g = 1, 60 do
-                    local best, bestPath, bestLen = nil, nil, math.huge
-                    for cell in pairs(remaining) do
-                        local path = findPath(startCol, startRow, cell.col, cell.row)
-                        if path and #path < bestLen then
-                            bestLen = #path
-                            best = cell
-                            bestPath = path
-                        end
-                    end
-                    if not best then break end
-                    remaining[best] = nil
-                    for _, p in ipairs(bestPath) do table.insert(route, p) end
-                    startCol, startRow = best.col, best.row
+            local openedCount = 0
+            for col = 1, W do
+                for row = 1, H do
+                    if grid[col][row].isOpened then openedCount = openedCount + 1 end
                 end
+            end
 
-                if #route > 0 then
-                    drawRoute(route) -- 在地图上画出这条路线
-                    navigateTo(route[#route], route)
-                    task.wait(0.05) -- 极短间隔，保持连续
-                else
-                    clearRouteLine()
-                    -- 没有确定安全格：猜最低雷概率的格子
-                    local bestGuessCell = nil
-                    local minProb = math.huge
-                    for part, P in pairs(lastBorderProbabilities or {}) do
-                        local x = math.floor(part.Position.X + 0.5)
-                        local z = math.floor(part.Position.Z + 0.5)
-                        local col = xToCol[x]
-                        local row = zToRow[z]
-                        if col and row and P < minProb then
-                            minProb = P
-                            bestGuessCell = grid[col][row]
+            -- 开局（全盘未翻开）时不做任何移动，等玩家手动翻开第一格后自动走再接管
+            if openedCount > 0 then
+                local key = getSecretKey()
+                if key and not lastDeducedNewBomb then
+                    -- 用最新安全格构建一条路线（最多60格），连续走完立即重新规划
+                    local route = {}
+                    local startCol, startRow = pCol, pRow
+                    local remaining = {}
+                    for _, cell in pairs(lastSafeTiles or {}) do remaining[cell] = true end
+
+                    for g = 1, 60 do
+                        local best, bestPath, bestLen = nil, nil, math.huge
+                        for cell in pairs(remaining) do
+                            local path = findPath(startCol, startRow, cell.col, cell.row)
+                            if path and #path < bestLen then
+                                bestLen = #path
+                                best = cell
+                                bestPath = path
+                            end
                         end
+                        if not best then break end
+                        remaining[best] = nil
+                        for _, p in ipairs(bestPath) do table.insert(route, p) end
+                        startCol, startRow = best.col, best.row
                     end
-                    if bestGuessCell then
-                        local guessPath = findPath(pCol, pRow, bestGuessCell.col, bestGuessCell.row)
-                        navigateTo(bestGuessCell.part, guessPath)
-                        task.wait(0.3)
+
+                    if #route > 0 then
+                        drawRoute(route) -- 在地图上画出这条路线
+                        navigateTo(route[#route], route)
+                        task.wait(0.05) -- 极短间隔，保持连续
                     else
-                        -- 最后兜底：随机本地格
-                        local candidates = getLocalGuessCandidates(pCol, pRow)
-                        if #candidates > 0 then
-                            local guessCell = candidates[math.random(1, #candidates)]
-                            local guessPath = findPath(pCol, pRow, guessCell.col, guessCell.row)
-                            navigateTo(guessCell.part, guessPath)
+                        clearRouteLine()
+                        -- 没有确定安全格：猜最低雷概率的格子
+                        local bestGuessCell = nil
+                        local minProb = math.huge
+                        for part, P in pairs(lastBorderProbabilities or {}) do
+                            local x = math.floor(part.Position.X + 0.5)
+                            local z = math.floor(part.Position.Z + 0.5)
+                            local col = xToCol[x]
+                            local row = zToRow[z]
+                            if col and row and P < minProb then
+                                minProb = P
+                                bestGuessCell = grid[col][row]
+                            end
+                        end
+                        if bestGuessCell then
+                            local guessPath = findPath(pCol, pRow, bestGuessCell.col, bestGuessCell.row)
+                            navigateTo(bestGuessCell.part, guessPath)
                             task.wait(0.3)
                         else
-                            autoWalkActive = false
-                            if AutoWalkToggle then AutoWalkToggle:Set(false) end
-                            notify("自动行走", "无可达安全格，已停止")
+                            -- 最后兜底：随机本地格
+                            local candidates = getLocalGuessCandidates(pCol, pRow)
+                            if #candidates > 0 then
+                                local guessCell = candidates[math.random(1, #candidates)]
+                                local guessPath = findPath(pCol, pRow, guessCell.col, guessCell.row)
+                                navigateTo(guessCell.part, guessPath)
+                                task.wait(0.3)
+                            else
+                                autoWalkActive = false
+                                if AutoWalkToggle then AutoWalkToggle:Set(false) end
+                                notify("自动行走", "无可达安全格，已停止")
+                            end
                         end
                     end
+                else
+                    task.wait(0.2)
                 end
             else
-                task.wait(0.2)
+                task.wait(0.3)
             end
-        else
-            task.wait(0.3)
+        end)
+        if not ok then
+            warn("[扫雷] 自动走出错:", err)
+            task.wait(0.5)
         end
     end
 end)
