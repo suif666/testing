@@ -292,23 +292,23 @@ local function updateESP(safeTiles, borderProbabilities)
             label.BackgroundTransparency = 1
             label.Text = string.format("%.0f%%", P * 100)
             label.TextColor3 = Color3.fromRGB(255, 248, 200) -- 接近底色的浅黄白，清晰可读
-            label.Font = Enum.Font.GothamBold
+            label.Font = Enum.Font.GothamBlack -- 最粗字体，远处也清晰
             label.TextScaled = true -- 自动缩放填满方块
             label.TextStrokeTransparency = 0
             label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
 
             local pad = Instance.new("UIPadding")
-            pad.PaddingTop = UDim.new(0, 5)
-            pad.PaddingBottom = UDim.new(0, 5)
-            pad.PaddingLeft = UDim.new(0, 3)
-            pad.PaddingRight = UDim.new(0, 3)
+            pad.PaddingTop = UDim.new(0, 3)
+            pad.PaddingBottom = UDim.new(0, 3)
+            pad.PaddingLeft = UDim.new(0, 2)
+            pad.PaddingRight = UDim.new(0, 2)
             pad.Parent = label
 
             -- 朝向系统：根据玩家摄像机的朝向旋转（不是玩家位置）
             local cam = workspace.CurrentCamera
             if cam then
                 local look = cam.CFrame.LookVector
-                label.Rotation = math.deg(math.atan2(look.X, look.Z))
+                label.Rotation = -math.deg(math.atan2(look.X, look.Z))
             end
 
             label.Parent = sg
@@ -804,9 +804,8 @@ local function updateDeductions()
         end
     end
 
-    -- Matrix solver + fallback single-cell rules
-    if not deducedNewBomb then
-        solveEquations(safeTiles, borderProbabilities)
+    -- Matrix solver + fallback single-cell rules（始终运行，保证概率 ESP 稳定显示）
+    solveEquations(safeTiles, borderProbabilities)
 
         for col = 1, W do
             for row = 1, H do
@@ -853,8 +852,6 @@ local function updateDeductions()
                 end
             end
         end
-    end
-
     if espActive then
         updateESP(safeTiles, borderProbabilities)
     end
@@ -925,6 +922,11 @@ local function navigateTo(part, path)
 end
 
 -- ============================================
+-- 求解结果共享（主循环算，自动行走协程用）
+local lastSafeTiles = {}
+local lastBorderProbabilities = {}
+local lastDeducedNewBomb = false
+
 task.spawn(function()
     while true do
         task.wait(espRefreshInterval)
@@ -950,6 +952,9 @@ task.spawn(function()
 
             local success, safeTiles, borderProbabilities, deducedNewBomb = updateDeductions()
             if not success then continue end
+            lastSafeTiles = safeTiles
+            lastBorderProbabilities = borderProbabilities
+            lastDeducedNewBomb = deducedNewBomb
 
             -- Auto Flag: place flags within flagDistance studs, with flagDelay between each
             if autoFlagActive then
@@ -969,104 +974,103 @@ task.spawn(function()
                 end
             end
 
-            -- Auto Walk: navigate to safest reachable tile
-            if autoWalkActive and not deducedNewBomb then
-                local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-                local pCol, pRow = getCurrentPlayerGrid()
-                if root and pCol and pRow then
-                    local openedCount = 0
-                    for col = 1, W do
-                        for row = 1, H do
-                            if grid[col][row].isOpened then openedCount = openedCount + 1 end
+        else
+            clearESP()
+            task.wait(0.2)
+        end
+    end
+end)
+
+-- ============================================
+-- 自动行走独立协程：不阻塞 ESP / 自动标记刷新
+-- ============================================
+task.spawn(function()
+    while true do
+        task.wait(0.15)
+        if not autoWalkActive then
+            task.wait(0.3)
+            continue
+        end
+        if not checkGridValid() then
+            initGrid()
+            task.wait(0.1)
+            continue
+        end
+
+        local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+        local pCol, pRow = getCurrentPlayerGrid()
+        if not root or not pCol or not pRow then continue end
+
+        local openedCount = 0
+        for col = 1, W do
+            for row = 1, H do
+                if grid[col][row].isOpened then openedCount = openedCount + 1 end
+            end
+        end
+
+        -- 开局（全盘未翻开）时不做任何移动，等玩家手动翻开第一格后自动走再接管
+        if openedCount > 0 then
+            local key = getSecretKey()
+            if key and not lastDeducedNewBomb then
+                -- 用主循环算出的最新安全格，一次性规划路线走完
+                local safeTiles = lastSafeTiles or {}
+                local route = {}
+                local startCol, startRow = pCol, pRow
+                local remaining = {}
+                for _, cell in pairs(safeTiles) do remaining[cell] = true end
+
+                for g = 1, 200 do
+                    local best, bestPath, bestLen = nil, nil, math.huge
+                    for cell in pairs(remaining) do
+                        local path = findPath(startCol, startRow, cell.col, cell.row)
+                        if path and #path < bestLen then
+                            bestLen = #path
+                            best = cell
+                            bestPath = path
                         end
                     end
+                    if not best then break end
+                    remaining[best] = nil
+                    for _, p in ipairs(bestPath) do table.insert(route, p) end
+                    startCol, startRow = best.col, best.row
+                end
 
-                    if openedCount == 0 then
-                        local midCol = math.floor(W / 2) + 1
-                        local midRow = math.floor(H / 2) + 1
-                        local targetPart = grid[midCol][midRow].part
-                        if targetPart then
-                            navigateTo(targetPart)
-                            task.wait(0.3)
+                if #route > 0 then
+                    navigateTo(route[#route], route)
+                else
+                    -- 没有确定安全格：猜最低雷概率的格子
+                    local bestGuessCell = nil
+                    local minProb = math.huge
+                    for part, P in pairs(lastBorderProbabilities or {}) do
+                        local x = math.floor(part.Position.X + 0.5)
+                        local z = math.floor(part.Position.Z + 0.5)
+                        local col = xToCol[x]
+                        local row = zToRow[z]
+                        if col and row and P < minProb then
+                            minProb = P
+                            bestGuessCell = grid[col][row]
                         end
+                    end
+                    if bestGuessCell then
+                        local guessPath = findPath(pCol, pRow, bestGuessCell.col, bestGuessCell.row)
+                        navigateTo(bestGuessCell.part, guessPath)
+                        task.wait(0.3)
                     else
-                        local key = getSecretKey()
-                        if key then
-                            -- 一次性规划路线：走完当前所有可达安全格（只走已翻开/已插旗格，避开雷区）
-                            local route = {}
-                            local startCol, startRow = pCol, pRow
-                            local remaining = {}
-                            for _, cell in pairs(safeTiles) do remaining[cell] = true end
-
-                            for g = 1, 200 do
-                                local best, bestPath, bestLen = nil, nil, math.huge
-                                for cell in pairs(remaining) do
-                                    local path = findPath(startCol, startRow, cell.col, cell.row)
-                                    if path and #path < bestLen then
-                                        bestLen = #path
-                                        best = cell
-                                        bestPath = path
-                                    end
-                                end
-                                if not best then break end
-                                remaining[best] = nil
-                                for _, p in ipairs(bestPath) do table.insert(route, p) end
-                                startCol, startRow = best.col, best.row
-                            end
-
-                            if #route > 0 then
-                                -- 一次性走完整条路线（经过的安全格会依次翻开）
-                                navigateTo(route[#route], route)
-                            else
-                                -- 没有确定安全格：猜最低雷概率的格子
-                                local bestGuessCell = nil
-                                local minProb = math.huge
-
-                                for part, P in pairs(borderProbabilities) do
-                                    local x = math.floor(part.Position.X + 0.5)
-                                    local z = math.floor(part.Position.Z + 0.5)
-                                    local col = xToCol[x]
-                                    local row = zToRow[z]
-                                    if col and row and P < minProb then
-                                        minProb = P
-                                        bestGuessCell = grid[col][row]
-                                    end
-                                end
-
-                                if bestGuessCell then
-                                    local guessPath = findPath(pCol, pRow, bestGuessCell.col, bestGuessCell.row)
-                                    navigateTo(bestGuessCell.part, guessPath)
-                                    local startWait = os.clock()
-                                    while not bestGuessCell.part:FindFirstChild("NumberGui") and
-                                        os.clock() - startWait < 1.0 and autoWalkActive do
-                                        task.wait(0.05)
-                                    end
-                                else
-                                    -- Final fallback: random local guess
-                                    local candidates = getLocalGuessCandidates(pCol, pRow)
-                                    if #candidates > 0 then
-                                        local guessCell = candidates[math.random(1, #candidates)]
-                                        local guessPath = findPath(pCol, pRow, guessCell.col, guessCell.row)
-                                        navigateTo(guessCell.part, guessPath)
-                                        local startWait = os.clock()
-                                        while not guessCell.part:FindFirstChild("NumberGui") and
-                                            os.clock() - startWait < 1.0 and autoWalkActive do
-                                            task.wait(0.05)
-                                        end
-                                    else
-                                        autoWalkActive = false
-                                        if AutoWalkToggle then AutoWalkToggle:Set(false) end
-                                        notify("Auto Walk", "Stopped — no reachable candidates.")
-                                    end
-                                end
-                            end
+                        -- 最后兜底：随机本地格
+                        local candidates = getLocalGuessCandidates(pCol, pRow)
+                        if #candidates > 0 then
+                            local guessCell = candidates[math.random(1, #candidates)]
+                            local guessPath = findPath(pCol, pRow, guessCell.col, guessCell.row)
+                            navigateTo(guessCell.part, guessPath)
+                            task.wait(0.3)
+                        else
+                            autoWalkActive = false
+                            if AutoWalkToggle then AutoWalkToggle:Set(false) end
+                            notify("自动行走", "无可达安全格，已停止")
                         end
                     end
                 end
             end
-        else
-            clearESP()
-            task.wait(0.2)
         end
     end
 end)
