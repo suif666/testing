@@ -1,23 +1,12 @@
--- 扫雷自动机器人（WindUI 独立版）
--- 提取自 blockerman_full.lua：去除卡密系统，仅保留地雷相关功能
--- 功能：自动标记 / 自动行走 / 循环传送安全方块 / 雷区ESP（含地雷概率）
+-- 扫雷自动机器人（远程脚本）
+if getgenv().__MINESWEEPER_LOADED then return end
+getgenv().__MINESWEEPER_LOADED = true
 
-local WindUI
-do
-    local ok, res = pcall(function()
-        local source = game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua")
-        local fn, compileErr = loadstring(source)
-        if not fn then
-            error(compileErr)
-        end
-        return fn()
-    end)
+local Tab = (getgenv().Tabs and getgenv().Tabs.MinesweeperTab) or getgenv().SutureMinesweeperTab
 
-    if not ok or not res then
-        warn("WindUI 加载失败，脚本已停止:", res)
-        return
-    end
-    WindUI = res
+if not Tab then
+    warn("[Minesweeper] 未找到 getgenv().Tabs.MinesweeperTab，请先在主脚本赋值")
+    return
 end
 
 local Players = game:GetService("Players")
@@ -76,7 +65,10 @@ end
 
 local function notify(title, content)
     pcall(function()
-        WindUI:Notify({ Title = title, Content = content, Icon = "bomb", Duration = 3 })
+        local w = getgenv().WindUI
+        if w and w.Notify then
+            w:Notify({ Title = title, Content = content, Icon = "bomb", Duration = 3 })
+        end
     end)
 end
 
@@ -1210,24 +1202,8 @@ player.CharacterAdded:Connect(onCharacterAdded)
 -- WINDUI 界面
 -- ============================================
 
-local win = WindUI:CreateWindow({
-    Title = "扫雷自动机器人",
-    Icon = "bomb",
-    Author = "Suture",
-    Folder = "MinesweeperBot",
-    Size = UDim2.fromOffset(620, 460),
-    MinSize = Vector2.new(560, 350),
-    Resizable = true,
-    Theme = "Dark",
-    SideBarWidth = 160,
-})
-
-local botSec = win:Section({ Title = "扫雷机器人", Icon = "folder", Opened = true })
-local mainTab = botSec:Tab({ Title = "自动", Icon = "bot" })
-local espTab = botSec:Tab({ Title = "ESP", Icon = "eye" })
-
 -- ===== 自动 =====
-local autoSec = mainTab:Section({ Title = "自动功能", Icon = "settings", Opened = true })
+local autoSec = Tab:Section({ Title = "自动功能", Icon = "settings", Opened = true })
 
 local function setAutoWalk(val)
     autoWalkActive = val
@@ -1309,7 +1285,7 @@ autoSec:Button({
 })
 
 -- ===== ESP =====
-local espSec = espTab:Section({ Title = "ESP 设置", Icon = "eye", Opened = true })
+local espSec = Tab:Section({ Title = "ESP 设置", Icon = "eye", Opened = true })
 
 espSec:Toggle({
     Title = "ESP 开关",
@@ -1334,5 +1310,4 @@ espSec:Slider({
     Callback = function(v) espRefreshInterval = v end,
 })
 
-mainTab:Select()
-WindUI:Notify({ Title = "扫雷自动机器人", Content = "加载完成", Icon = "bomb", Duration = 3 })
+notify("扫雷自动机器人", "加载完成")
