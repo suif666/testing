@@ -57,6 +57,7 @@ local xToCol, zToRow = {}, {}
 local localFlags = {}
 local deducedBombs = {}
 local probGuis = {}
+local routeLine = nil
 
 local espFolder = workspace:FindFirstChild("BotESPFolder")
 if not espFolder then
@@ -899,6 +900,37 @@ local function navigateTo(part, path)
     end
 end
 
+-- 清除路线线
+local function clearRouteLine()
+    if routeLine and routeLine.Parent then routeLine:Destroy() end
+    routeLine = nil
+end
+
+-- 在地图上绘制规划好的行走路线（绿线）
+local function drawRoute(path)
+    clearRouteLine()
+    if not path or #path == 0 then return end
+
+    local points = {}
+    local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    if root then table.insert(points, root.Position) end
+    for _, p in ipairs(path) do
+        table.insert(points, p.Position)
+    end
+    if #points < 2 then return end
+
+    local line = Instance.new("LineHandleAdornment")
+    line.Adornee = workspace.Terrain -- Terrain 的 CFrame 是单位矩阵，点即世界坐标
+    line.AlwaysOnTop = true
+    line.Transparency = 0.15
+    line.Color3 = Color3.fromRGB(0, 255, 120)
+    line.Thickness = 3
+    line.LengthUnit = 0.2
+    line.Points = points
+    line.Parent = espFolder
+    routeLine = line
+end
+
 -- ============================================
 -- 求解结果共享（主循环算，自动行走协程用）
 local lastSafeTiles = {}
@@ -990,13 +1022,13 @@ task.spawn(function()
         if openedCount > 0 then
             local key = getSecretKey()
             if key and not lastDeducedNewBomb then
-                -- 用最新安全格构建一条短路线（最多10格），连续走完立即重新规划，保持连贯
+                -- 用最新安全格构建一条路线（最多60格），连续走完立即重新规划
                 local route = {}
                 local startCol, startRow = pCol, pRow
                 local remaining = {}
                 for _, cell in pairs(lastSafeTiles or {}) do remaining[cell] = true end
 
-                for g = 1, 10 do
+                for g = 1, 60 do
                     local best, bestPath, bestLen = nil, nil, math.huge
                     for cell in pairs(remaining) do
                         local path = findPath(startCol, startRow, cell.col, cell.row)
@@ -1013,9 +1045,11 @@ task.spawn(function()
                 end
 
                 if #route > 0 then
+                    drawRoute(route) -- 在地图上画出这条路线
                     navigateTo(route[#route], route)
                     task.wait(0.05) -- 极短间隔，保持连续
                 else
+                    clearRouteLine()
                     -- 没有确定安全格：猜最低雷概率的格子
                     local bestGuessCell = nil
                     local minProb = math.huge
@@ -1171,6 +1205,7 @@ local function setAutoWalk(val)
         initGrid()
         notify("自动行走", "已开启")
     else
+        clearRouteLine()
         notify("自动行走", "已关闭")
     end
 end
