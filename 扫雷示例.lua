@@ -23,7 +23,6 @@ local autoWalkActive = false
 local autoFlagActive = false
 local espActive = false
 local AutoWalkToggle = nil
-local teleportSafeActive = false
 
 local customWalkSpeed = 16
 local customJumpPower = 50
@@ -46,30 +45,12 @@ local xToCol, zToRow = {}, {}
 local localFlags = {}
 local deducedBombs = {}
 local probGuis = {}
-local routeParts = {}
 
 local espFolder = workspace:FindFirstChild("BotESPFolder")
 if not espFolder then
     espFolder = Instance.new("Folder")
     espFolder.Name = "BotESPFolder"
     espFolder.Parent = workspace
-end
-
--- 路线线单独存放，不被 ESP 清屏（espFolder:ClearAllChildren）误删
-local routeFolder = workspace:FindFirstChild("SutureRouteFolder")
-if not routeFolder then
-    routeFolder = Instance.new("Folder")
-    routeFolder.Name = "SutureRouteFolder"
-    routeFolder.Parent = workspace
-end
-
-local function notify(title, content)
-    pcall(function()
-        local w = getgenv().WindUI
-        if w and w.Notify then
-            w:Notify({ Title = title, Content = content, Icon = "bomb", Duration = 3 })
-        end
-    end)
 end
 
 -- ============================================
@@ -883,67 +864,12 @@ local function walkPath(path)
     end
 end
 
--- 直接传送到方块上方
-local function teleportTo(part)
-    local char = player.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    if not root or not part then return end
-    root.CFrame = CFrame.new(part.Position.X, part.Position.Y + 2, part.Position.Z)
-end
-
 -- 走路专用：只走安全路径（已翻开/已插旗的格子），避免踩雷
 local function navigateTo(part, path)
     if path and #path > 0 then
         walkPath(path)
     else
         walkTo(part)
-    end
-end
-
--- 清除路线线
-local function clearRouteLine()
-    for _, p in ipairs(routeParts) do
-        if p and p.Parent then p:Destroy() end
-    end
-    routeParts = {}
-end
-
--- 在地图上绘制规划好的行走路线（绿色霓虹线，用多个小方块拼成，任何环境都能稳定显示）
-local function drawRoute(path)
-    clearRouteLine()
-    if not path or #path == 0 then return end
-    local ok, err = pcall(function()
-        local points = {}
-        local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-        if root then table.insert(points, root.Position) end
-        for _, p in ipairs(path) do
-            table.insert(points, p.Position)
-        end
-        if #points < 2 then return end
-
-        -- 相邻点之间生成一段亮线；抬高 1 个格子高度，避免被方块遮挡
-        for i = 1, #points - 1 do
-            local a = points[i] + Vector3.new(0, 1, 0)
-            local b = points[i + 1] + Vector3.new(0, 1, 0)
-            local dist = (b - a).Magnitude
-            if dist > 0.01 then
-                local mid = (a + b) / 2
-                local seg = Instance.new("Part")
-                seg.Name = "SutureRouteLine"
-                seg.Anchored = true
-                seg.CanCollide = false
-                seg.Material = Enum.Material.Neon
-                seg.Color = Color3.fromRGB(0, 255, 120)
-                seg.Size = Vector3.new(0.35, 0.35, dist)
-                seg.CFrame = CFrame.lookAt(mid, b)
-                seg.Transparency = 0
-                seg.Parent = routeFolder
-                table.insert(routeParts, seg)
-            end
-        end
-    end)
-    if not ok then
-        warn("[扫雷] 路线绘制失败:", err)
     end
 end
 
@@ -957,7 +883,7 @@ task.spawn(function()
     while true do
         task.wait(espRefreshInterval)
 
-        if autoWalkActive or autoFlagActive or espActive or teleportSafeActive then
+        if autoWalkActive or autoFlagActive or espActive then
             local gameRunningVal = ReplicatedStorage:FindFirstChild("Info") and
                 ReplicatedStorage.Info:FindFirstChild("GameRunning") and
                 ReplicatedStorage.Info.GameRunning.Value
@@ -1062,11 +988,9 @@ task.spawn(function()
                     end
 
                     if #route > 0 then
-                        drawRoute(route) -- 在地图上画出这条路线
                         navigateTo(route[#route], route)
                         task.wait(0.05) -- 极短间隔，保持连续
                     else
-                        clearRouteLine()
                         -- 没有确定安全格：猜最低雷概率的格子
                         local bestGuessCell = nil
                         local minProb = math.huge
@@ -1095,7 +1019,6 @@ task.spawn(function()
                             else
                                 autoWalkActive = false
                                 if AutoWalkToggle then AutoWalkToggle:Set(false) end
-                                notify("自动行走", "无可达安全格，已停止")
                             end
                         end
                     end
@@ -1109,56 +1032,6 @@ task.spawn(function()
         if not ok then
             warn("[扫雷] 自动走出错:", err)
             task.wait(0.5)
-        end
-    end
-end)
-
--- ============================================
--- 循环传送独立协程：与自动走分开，快速反复传送到安全格，直到一局结束
--- ============================================
-task.spawn(function()
-    while true do
-        if not teleportSafeActive then
-            task.wait(0.3)
-            continue
-        end
-
-        local gameRunningVal = ReplicatedStorage:FindFirstChild("Info") and
-            ReplicatedStorage.Info:FindFirstChild("GameRunning") and
-            ReplicatedStorage.Info.GameRunning.Value
-        if not gameRunningVal then
-            task.wait(0.5)
-            continue
-        end
-
-        if not checkGridValid() then
-            initGrid()
-            task.wait(0.1)
-            continue
-        end
-
-        local pCol, pRow = getCurrentPlayerGrid()
-        if not pCol or not pRow then
-            task.wait(0.1)
-            continue
-        end
-
-        -- 挑当前最近的安全格，传送过去（每格只传送一次），立刻继续找下一个
-        local bestCell, bestPath, bestLen = nil, nil, math.huge
-        for _, cell in pairs(lastSafeTiles or {}) do
-            local path = findPath(pCol, pRow, cell.col, cell.row)
-            if path and #path < bestLen then
-                bestLen = #path
-                bestCell = cell
-                bestPath = path
-            end
-        end
-
-        if bestCell then
-            teleportTo(bestCell.part)
-            task.wait(0.05) -- 快速连续传送
-        else
-            task.wait(0.2)
         end
     end
 end)
@@ -1203,16 +1076,33 @@ player.CharacterAdded:Connect(onCharacterAdded)
 -- ============================================
 
 -- ===== 自动 =====
-local autoSec = Tab:Section({ Title = "自动功能", Icon = "settings", Opened = true })
+local autoSec = Tab:Section({ Title = "自写扫雷", Icon = "settings", Opened = true })
+
+autoSec:Toggle({
+    Title = "ESP 开关",
+    Desc = "高亮雷 / 安全 / 不确定格子",
+    Value = false,
+    Callback = function(val)
+        espActive = val
+        if val then
+            initGrid()
+        else
+            clearESP()
+        end
+    end,
+})
+
+autoSec:Slider({
+    Title = "刷新间隔（秒）",
+    Step = 0.05,
+    Value = { Min = 0.05, Max = 5, Default = espRefreshInterval },
+    Callback = function(v) espRefreshInterval = v end,
+})
 
 local function setAutoWalk(val)
     autoWalkActive = val
     if val then
         initGrid()
-        notify("自动行走", "已开启")
-    else
-        clearRouteLine()
-        notify("自动行走", "已关闭")
     end
 end
 
@@ -1220,9 +1110,6 @@ local function setAutoFlag(val)
     autoFlagActive = val
     if val then
         initGrid()
-        notify("自动标记", "已开启")
-    else
-        notify("自动标记", "已关闭")
     end
 end
 
@@ -1240,16 +1127,6 @@ autoSec:Toggle({
     Callback = setAutoFlag,
 })
 
-autoSec:Toggle({
-    Title = "循环传送安全方块",
-    Desc = "独立于自动走：快速反复传送到安全格，直到一局结束",
-    Value = false,
-    Callback = function(val)
-        teleportSafeActive = val
-        notify("循环传送", val and "已开启" or "已关闭")
-    end,
-})
-
 autoSec:Slider({
     Title = "标记距离",
     Step = 5,
@@ -1264,50 +1141,10 @@ autoSec:Slider({
     Callback = function(v) flagDelay = v end,
 })
 
-autoSec:Slider({
-    Title = "行走速度",
-    Step = 1,
-    Value = { Min = 16, Max = 150, Default = customWalkSpeed },
-    Callback = function(v)
-        customWalkSpeed = v
-        local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-        if hum then hum.WalkSpeed = v end
-    end,
-})
-
 autoSec:Button({
     Title = "重新初始化棋盘",
     Desc = "进入对局后棋盘没识别到时手动点一下",
     Callback = function()
         initGrid()
-        notify("棋盘", "已重新初始化")
     end,
 })
-
--- ===== ESP =====
-local espSec = Tab:Section({ Title = "ESP 设置", Icon = "eye", Opened = true })
-
-espSec:Toggle({
-    Title = "ESP 开关",
-    Desc = "高亮雷 / 安全 / 不确定格子",
-    Value = false,
-    Callback = function(val)
-        espActive = val
-        if val then
-            initGrid()
-            notify("ESP", "已开启")
-        else
-            clearESP()
-            notify("ESP", "已关闭")
-        end
-    end,
-})
-
-espSec:Slider({
-    Title = "刷新间隔（秒）",
-    Step = 0.05,
-    Value = { Min = 0.05, Max = 5, Default = espRefreshInterval },
-    Callback = function(v) espRefreshInterval = v end,
-})
-
-notify("扫雷自动机器人", "加载完成")
