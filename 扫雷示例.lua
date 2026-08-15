@@ -1,6 +1,6 @@
 -- 扫雷自动机器人（WindUI 独立版）
 -- 提取自 blockerman_full.lua：去除卡密系统，仅保留地雷相关功能
--- 功能：自动标记 / 自动行走 / 雷区ESP / 防爆炸
+-- 功能：自动标记 / 自动行走 / 循环传送安全方块 / 雷区ESP（含地雷概率）
 
 local WindUI
 do
@@ -33,9 +33,8 @@ local player = Players.LocalPlayer
 local autoWalkActive = false
 local autoFlagActive = false
 local espActive = false
-local antiExplosionActive = false
-local antiExplosionConn = nil
 local AutoWalkToggle = nil
+local teleportSafeActive = false
 
 local customWalkSpeed = 16
 local customJumpPower = 50
@@ -271,23 +270,55 @@ local function updateESP(safeTiles, borderProbabilities)
             box.SurfaceTransparency = 0.6
             box.Parent = espFolder
 
-            local bb = Instance.new("BillboardGui")
-            bb.Size = UDim2.new(0, 100, 0, 40)
-            bb.AlwaysOnTop = true
-            bb.Adornee = part
-            bb.StudsOffset = Vector3.new(0, 3, 0)
+            -- 概率标签：平躺贴在方块上表面，跟随玩家视角旋转角度
+            local sg = Instance.new("SurfaceGui")
+            sg.Face = Enum.NormalId.Top
+            sg.PixelsPerStud = 50
+            sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+            local pill = Instance.new("Frame")
+            pill.Size = UDim2.fromOffset(52, 22)
+            pill.AnchorPoint = Vector2.new(0.5, 0.5)
+            pill.BackgroundColor3 = Color3.fromRGB(17, 17, 27)
+            pill.BackgroundTransparency = 0.08
+            pill.BorderSizePixel = 0
+
+            local corner = Instance.new("UICorner")
+            corner.CornerRadius = UDim.new(1, 0)
+            corner.Parent = pill
+
+            local stroke = Instance.new("UIStroke")
+            stroke.Color = color
+            stroke.Thickness = 1.2
+            stroke.Parent = pill
 
             local label = Instance.new("TextLabel")
-            label.Size = UDim2.new(1, 0, 1, 0)
+            label.Size = UDim2.fromScale(1, 1)
             label.BackgroundTransparency = 1
-            label.TextSize = 26
-            label.TextColor3 = color
-            label.Font = Enum.Font.GothamBold
-            label.TextStrokeTransparency = 0
-            label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
             label.Text = string.format("%.0f%%", P * 100)
-            label.Parent = bb
-            bb.Parent = espFolder
+            label.TextColor3 = Color3.fromRGB(255, 255, 255)
+            label.Font = Enum.Font.GothamBold
+            label.TextSize = 11
+            label.Parent = pill
+
+            -- 顶面像素尺寸 = 方块大小 x PixelsPerStud，居中摆放
+            local faceW = part.Size.X * 50
+            local faceD = part.Size.Z * 50
+            pill.Position = UDim2.new(
+                0, math.max(0, (faceW - 52) / 2),
+                0, math.max(0, (faceD - 22) / 2)
+            )
+
+            -- 跟随玩家视角：按玩家相对方块的方向旋转文字（若反了可把负号去掉）
+            local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            if root and part.Parent then
+                local dx = root.Position.X - part.Position.X
+                local dz = root.Position.Z - part.Position.Z
+                pill.Rotation = -math.deg(math.atan2(dx, dz))
+            end
+
+            pill.Parent = sg
+            sg.Parent = espFolder
         end
     end
 end
@@ -859,8 +890,41 @@ local function walkTo(part)
 end
 
 local function walkPath(path)
+    local char = player.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not root or not hum then return end
+    hum.WalkSpeed = customWalkSpeed
+
+    -- 只沿安全路径走（已翻开/已插旗的格子），不穿雷区
     for _, part in ipairs(path) do
         if not autoWalkActive then break end
+        local targetPos = Vector3.new(part.Position.X, root.Position.Y, part.Position.Z)
+        hum:MoveTo(targetPos)
+        -- 接近当前节点就立刻切下一个：连续移动，不在每格停顿
+        local startT = os.clock()
+        while autoWalkActive and (root.Position - targetPos).Magnitude > 0.6 do
+            if os.clock() - startT > 2 then break end
+            task.wait()
+        end
+    end
+end
+
+-- 直接传送到方块上方
+local function teleportTo(part)
+    local char = player.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root or not part then return end
+    root.CFrame = CFrame.new(part.Position.X, part.Position.Y + 2, part.Position.Z)
+end
+
+-- 传送模式用传送；走路模式只走安全路径（已翻开/已插旗的格子），避免踩雷
+local function navigateTo(part, path)
+    if teleportSafeActive then
+        teleportTo(part)
+    elseif path and #path > 0 then
+        walkPath(path)
+    else
         walkTo(part)
     end
 end
@@ -927,7 +991,7 @@ task.spawn(function()
                         local midRow = math.floor(H / 2) + 1
                         local targetPart = grid[midCol][midRow].part
                         if targetPart then
-                            walkTo(targetPart)
+                            navigateTo(targetPart)
                             task.wait(0.3)
                         end
                     else
@@ -948,7 +1012,7 @@ task.spawn(function()
                             end
 
                             if bestPath and targetCell then
-                                walkPath(bestPath)
+                                navigateTo(targetCell.part, bestPath)
                                 local startWait = os.clock()
                                 while not targetCell.part:FindFirstChild("NumberGui") and
                                     os.clock() - startWait < 1.0 and autoWalkActive do
@@ -971,8 +1035,8 @@ task.spawn(function()
                                 end
 
                                 if bestGuessCell then
-                                    local path = findPath(pCol, pRow, bestGuessCell.col, bestGuessCell.row)
-                                    if path then walkPath(path) else walkTo(bestGuessCell.part) end
+                                    local guessPath = findPath(pCol, pRow, bestGuessCell.col, bestGuessCell.row)
+                                    navigateTo(bestGuessCell.part, guessPath)
                                     local startWait = os.clock()
                                     while not bestGuessCell.part:FindFirstChild("NumberGui") and
                                         os.clock() - startWait < 1.0 and autoWalkActive do
@@ -983,8 +1047,8 @@ task.spawn(function()
                                     local candidates = getLocalGuessCandidates(pCol, pRow)
                                     if #candidates > 0 then
                                         local guessCell = candidates[math.random(1, #candidates)]
-                                        local path = findPath(pCol, pRow, guessCell.col, guessCell.row)
-                                        if path then walkPath(path) else walkTo(guessCell.part) end
+                                        local guessPath = findPath(pCol, pRow, guessCell.col, guessCell.row)
+                                        navigateTo(guessCell.part, guessPath)
                                         local startWait = os.clock()
                                         while not guessCell.part:FindFirstChild("NumberGui") and
                                             os.clock() - startWait < 1.0 and autoWalkActive do
@@ -1007,40 +1071,6 @@ task.spawn(function()
         end
     end
 end)
-local function applyAntiExplosion(char)
-    if not char then return end
-    local hum = char:WaitForChild("Humanoid", 3)
-    if not hum then return end
-
-    if antiExplosionConn then antiExplosionConn:Disconnect(); antiExplosionConn = nil end
-
-    if not antiExplosionActive then return end
-
-    -- Intercept Dead state only — let HP drain so the server fires the
-    -- explosion animation, then snap the humanoid back to Running.
-    antiExplosionConn = hum.StateChanged:Connect(function(old, new)
-        if not antiExplosionActive then return end
-        if new == Enum.HumanoidStateType.Dead then
-            task.defer(function()
-                if hum and hum.Parent then
-                    hum.Health = hum.MaxHealth
-                    hum:ChangeState(Enum.HumanoidStateType.Running)
-                end
-            end)
-        end
-    end)
-end
-
--- Re-apply on every character spawn (also needed if player does die before toggle is on)
-player.CharacterAdded:Connect(function(char)
-    if antiExplosionActive then
-        task.defer(function() applyAntiExplosion(char) end)
-    end
-end)
-
-if player.Character and antiExplosionActive then
-    applyAntiExplosion(player.Character)
-end
 
 -- ============================================
 -- CHARACTER RESPAWN HANDLER
@@ -1096,7 +1126,6 @@ local win = WindUI:CreateWindow({
 local botSec = win:Section({ Title = "扫雷机器人", Icon = "folder", Opened = true })
 local mainTab = botSec:Tab({ Title = "自动", Icon = "bot" })
 local espTab = botSec:Tab({ Title = "ESP", Icon = "eye" })
-local safeTab = botSec:Tab({ Title = "安全", Icon = "shield" })
 
 -- ===== 自动 =====
 local autoSec = mainTab:Section({ Title = "自动功能", Icon = "settings", Opened = true })
@@ -1133,6 +1162,16 @@ autoSec:Toggle({
     Desc = "自动给推断出的雷插旗",
     Value = false,
     Callback = setAutoFlag,
+})
+
+autoSec:Toggle({
+    Title = "循环传送安全方块",
+    Desc = "找到安全格后直接传送到方块上方，代替走路",
+    Value = false,
+    Callback = function(val)
+        teleportSafeActive = val
+        notify("循环传送", val and "已开启" or "已关闭")
+    end,
 })
 
 autoSec:Slider({
@@ -1193,28 +1232,6 @@ espSec:Slider({
     Step = 0.05,
     Value = { Min = 0.05, Max = 5, Default = espRefreshInterval },
     Callback = function(v) espRefreshInterval = v end,
-})
-
--- ===== 安全 =====
-local safeSec = safeTab:Section({ Title = "安全", Icon = "shield", Opened = true })
-
-safeSec:Toggle({
-    Title = "防爆炸（无敌）",
-    Desc = "踩雷不会死，服务器仍会触发爆炸动画",
-    Value = false,
-    Callback = function(val)
-        antiExplosionActive = val
-        if val then
-            applyAntiExplosion(player.Character)
-            notify("防爆炸", "已开启")
-        else
-            if antiExplosionConn then
-                antiExplosionConn:Disconnect()
-                antiExplosionConn = nil
-            end
-            notify("防爆炸", "已关闭")
-        end
-    end,
 })
 
 mainTab:Select()
