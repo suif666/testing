@@ -287,10 +287,10 @@ local function updateESP(safeTiles, borderProbabilities)
             sg.CanvasSize = Vector2.new(math.max(faceW, 1), math.max(faceD, 1))
 
             local circle = Instance.new("Frame")
-            circle.Size = UDim2.fromOffset(44, 44)
-            circle.AnchorPoint = Vector2.new(0.5, 0.5)
-            circle.BackgroundColor3 = Color3.fromRGB(17, 17, 27)
-            circle.BackgroundTransparency = 0.08
+            circle.Size = UDim2.fromOffset(math.max(faceW, 1), math.max(faceD, 1)) -- 填满整个方块顶面
+            circle.AnchorPoint = Vector2.new(0, 0)
+            circle.Position = UDim2.new(0, 0, 0, 0)
+            circle.BackgroundColor3 = Color3.fromRGB(255, 205, 0) -- 黄色
             circle.BorderSizePixel = 0
 
             local corner = Instance.new("UICorner")
@@ -306,29 +306,24 @@ local function updateESP(safeTiles, borderProbabilities)
             label.Size = UDim2.fromScale(1, 1)
             label.BackgroundTransparency = 1
             label.Text = string.format("%.0f%%", P * 100)
-            label.TextColor3 = Color3.fromRGB(255, 255, 255)
+            label.TextColor3 = Color3.fromRGB(255, 248, 200) -- 接近底色的浅黄白，清晰可读
             label.Font = Enum.Font.GothamBold
             label.TextScaled = true -- 百分数自动缩放填满圆圈
             label.Parent = circle
 
             local pad = Instance.new("UIPadding")
-            pad.PaddingTop = UDim.new(0, 6)
-            pad.PaddingBottom = UDim.new(0, 6)
-            pad.PaddingLeft = UDim.new(0, 4)
-            pad.PaddingRight = UDim.new(0, 4)
+            pad.PaddingTop = UDim.new(0, 5)
+            pad.PaddingBottom = UDim.new(0, 5)
+            pad.PaddingLeft = UDim.new(0, 3)
+            pad.PaddingRight = UDim.new(0, 3)
             pad.Parent = label
-
-            circle.Position = UDim2.new(
-                0, math.max(0, (faceW - 44) / 2),
-                0, math.max(0, (faceD - 44) / 2)
-            )
 
             -- 跟随玩家视角：按玩家相对方块的方向旋转文字（若反了可把负号去掉）
             local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
             if root and part.Parent then
                 local dx = root.Position.X - part.Position.X
                 local dz = root.Position.Z - part.Position.Z
-                circle.Rotation = -math.deg(math.atan2(dx, dz))
+                circle.Rotation = math.deg(math.atan2(dx, dz))
             end
 
             circle.Parent = sg
