@@ -890,11 +890,9 @@ local function teleportTo(part)
     root.CFrame = CFrame.new(part.Position.X, part.Position.Y + 2, part.Position.Z)
 end
 
--- 传送模式用传送；走路模式只走安全路径（已翻开/已插旗的格子），避免踩雷
+-- 走路专用：只走安全路径（已翻开/已插旗的格子），避免踩雷
 local function navigateTo(part, path)
-    if teleportSafeActive then
-        teleportTo(part)
-    elseif path and #path > 0 then
+    if path and #path > 0 then
         walkPath(path)
     else
         walkTo(part)
@@ -911,7 +909,7 @@ task.spawn(function()
     while true do
         task.wait(espRefreshInterval)
 
-        if autoWalkActive or autoFlagActive or espActive then
+        if autoWalkActive or autoFlagActive or espActive or teleportSafeActive then
             local gameRunningVal = ReplicatedStorage:FindFirstChild("Info") and
                 ReplicatedStorage.Info:FindFirstChild("GameRunning") and
                 ReplicatedStorage.Info.GameRunning.Value
@@ -966,7 +964,7 @@ end)
 -- ============================================
 task.spawn(function()
     while true do
-        task.wait(0.15)
+        task.wait(0.05)
         if not autoWalkActive then
             task.wait(0.3)
             continue
@@ -992,19 +990,31 @@ task.spawn(function()
         if openedCount > 0 then
             local key = getSecretKey()
             if key and not lastDeducedNewBomb then
-                -- 每次只挑当前最近的安全格（主循环实时刷新安全格，永远先踩近的）
-                local bestCell, bestPath, bestLen = nil, nil, math.huge
-                for _, cell in pairs(lastSafeTiles or {}) do
-                    local path = findPath(pCol, pRow, cell.col, cell.row)
-                    if path and #path < bestLen then
-                        bestLen = #path
-                        bestCell = cell
-                        bestPath = path
+                -- 用最新安全格构建一条短路线（最多10格），连续走完立即重新规划，保持连贯
+                local route = {}
+                local startCol, startRow = pCol, pRow
+                local remaining = {}
+                for _, cell in pairs(lastSafeTiles or {}) do remaining[cell] = true end
+
+                for g = 1, 10 do
+                    local best, bestPath, bestLen = nil, nil, math.huge
+                    for cell in pairs(remaining) do
+                        local path = findPath(startCol, startRow, cell.col, cell.row)
+                        if path and #path < bestLen then
+                            bestLen = #path
+                            best = cell
+                            bestPath = path
+                        end
                     end
+                    if not best then break end
+                    remaining[best] = nil
+                    for _, p in ipairs(bestPath) do table.insert(route, p) end
+                    startCol, startRow = best.col, best.row
                 end
 
-                if bestCell and bestPath then
-                    navigateTo(bestCell.part, bestPath)
+                if #route > 0 then
+                    navigateTo(route[#route], route)
+                    task.wait(0.05) -- 极短间隔，保持连续
                 else
                     -- 没有确定安全格：猜最低雷概率的格子
                     local bestGuessCell = nil
@@ -1038,7 +1048,61 @@ task.spawn(function()
                         end
                     end
                 end
+            else
+                task.wait(0.2)
             end
+        else
+            task.wait(0.3)
+        end
+    end
+end)
+
+-- ============================================
+-- 循环传送独立协程：与自动走分开，快速反复传送到安全格，直到一局结束
+-- ============================================
+task.spawn(function()
+    while true do
+        if not teleportSafeActive then
+            task.wait(0.3)
+            continue
+        end
+
+        local gameRunningVal = ReplicatedStorage:FindFirstChild("Info") and
+            ReplicatedStorage.Info:FindFirstChild("GameRunning") and
+            ReplicatedStorage.Info.GameRunning.Value
+        if not gameRunningVal then
+            task.wait(0.5)
+            continue
+        end
+
+        if not checkGridValid() then
+            initGrid()
+            task.wait(0.1)
+            continue
+        end
+
+        local pCol, pRow = getCurrentPlayerGrid()
+        if not pCol or not pRow then
+            task.wait(0.1)
+            continue
+        end
+
+        -- 挑当前最近的安全格，传送过去（每格只传送一次），立刻继续找下一个
+        local bestCell, bestPath, bestLen = nil, nil, math.huge
+        for _, cell in pairs(lastSafeTiles or {}) do
+            local path = findPath(pCol, pRow, cell.col, cell.row)
+            if path and #path < bestLen then
+                bestLen = #path
+                bestCell = cell
+                bestPath = path
+            end
+        end
+
+        if bestCell then
+            teleportTo(bestCell.part)
+            task.wait(0.05) -- 快速连续传送
+        else
+            task.wait(0.2)
         end
     end
 end)
@@ -1137,7 +1201,7 @@ autoSec:Toggle({
 
 autoSec:Toggle({
     Title = "循环传送安全方块",
-    Desc = "找到安全格后直接传送到方块上方，代替走路",
+    Desc = "独立于自动走：快速反复传送到安全格，直到一局结束",
     Value = false,
     Callback = function(val)
         teleportSafeActive = val
