@@ -57,7 +57,7 @@ local xToCol, zToRow = {}, {}
 local localFlags = {}
 local deducedBombs = {}
 local probGuis = {}
-local routeLine = nil
+local routeParts = {}
 
 local espFolder = workspace:FindFirstChild("BotESPFolder")
 if not espFolder then
@@ -66,15 +66,13 @@ if not espFolder then
     espFolder.Parent = workspace
 end
 
--- 路线线锚点（单位矩阵 CFrame 的世界坐标部件，LineHandleAdornment 必须有 BasePart 作 Adornee）
-local routeAnchor = Instance.new("Part")
-routeAnchor.Name = "SutureRouteAnchor"
-routeAnchor.Anchored = true
-routeAnchor.CanCollide = false
-routeAnchor.Transparency = 1
-routeAnchor.Size = Vector3.new(1, 1, 1)
-routeAnchor.CFrame = CFrame.new() -- 原点、单位矩阵，路线点直接用世界坐标
-routeAnchor.Parent = workspace
+-- 路线线单独存放，不被 ESP 清屏（espFolder:ClearAllChildren）误删
+local routeFolder = workspace:FindFirstChild("SutureRouteFolder")
+if not routeFolder then
+    routeFolder = Instance.new("Folder")
+    routeFolder.Name = "SutureRouteFolder"
+    routeFolder.Parent = workspace
+end
 
 local function notify(title, content)
     pcall(function()
@@ -912,11 +910,13 @@ end
 
 -- 清除路线线
 local function clearRouteLine()
-    if routeLine and routeLine.Parent then routeLine:Destroy() end
-    routeLine = nil
+    for _, p in ipairs(routeParts) do
+        if p and p.Parent then p:Destroy() end
+    end
+    routeParts = {}
 end
 
--- 在地图上绘制规划好的行走路线（绿线）
+-- 在地图上绘制规划好的行走路线（绿色霓虹线，用多个小方块拼成，任何环境都能稳定显示）
 local function drawRoute(path)
     clearRouteLine()
     if not path or #path == 0 then return end
@@ -929,16 +929,26 @@ local function drawRoute(path)
         end
         if #points < 2 then return end
 
-        local line = Instance.new("LineHandleAdornment")
-        line.Adornee = routeAnchor -- 世界坐标锚点，点直接用世界坐标
-        line.AlwaysOnTop = true
-        line.Transparency = 0.15
-        line.Color3 = Color3.fromRGB(0, 255, 120)
-        line.Thickness = 3
-        line.LengthUnit = 0.2
-        line.Points = points
-        line.Parent = espFolder
-        routeLine = line
+        -- 相邻点之间生成一段亮线；抬高 1 个格子高度，避免被方块遮挡
+        for i = 1, #points - 1 do
+            local a = points[i] + Vector3.new(0, 1, 0)
+            local b = points[i + 1] + Vector3.new(0, 1, 0)
+            local dist = (b - a).Magnitude
+            if dist > 0.01 then
+                local mid = (a + b) / 2
+                local seg = Instance.new("Part")
+                seg.Name = "SutureRouteLine"
+                seg.Anchored = true
+                seg.CanCollide = false
+                seg.Material = Enum.Material.Neon
+                seg.Color = Color3.fromRGB(0, 255, 120)
+                seg.Size = Vector3.new(0.35, 0.35, dist)
+                seg.CFrame = CFrame.lookAt(mid, b)
+                seg.Transparency = 0
+                seg.Parent = routeFolder
+                table.insert(routeParts, seg)
+            end
+        end
     end)
     if not ok then
         warn("[扫雷] 路线绘制失败:", err)
