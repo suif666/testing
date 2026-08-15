@@ -286,21 +286,21 @@ local function updateESP(safeTiles, borderProbabilities)
             local faceD = part.Size.Z * 50
             sg.CanvasSize = Vector2.new(math.max(faceW, 1), math.max(faceD, 1))
 
-            local pill = Instance.new("Frame")
-            pill.Size = UDim2.fromOffset(52, 22)
-            pill.AnchorPoint = Vector2.new(0.5, 0.5)
-            pill.BackgroundColor3 = Color3.fromRGB(17, 17, 27)
-            pill.BackgroundTransparency = 0.08
-            pill.BorderSizePixel = 0
+            local circle = Instance.new("Frame")
+            circle.Size = UDim2.fromOffset(44, 44)
+            circle.AnchorPoint = Vector2.new(0.5, 0.5)
+            circle.BackgroundColor3 = Color3.fromRGB(17, 17, 27)
+            circle.BackgroundTransparency = 0.08
+            circle.BorderSizePixel = 0
 
             local corner = Instance.new("UICorner")
-            corner.CornerRadius = UDim.new(1, 0)
-            corner.Parent = pill
+            corner.CornerRadius = UDim.new(0.5, 0) -- 正圆
+            corner.Parent = circle
 
             local stroke = Instance.new("UIStroke")
             stroke.Color = color
-            stroke.Thickness = 1.2
-            stroke.Parent = pill
+            stroke.Thickness = 2
+            stroke.Parent = circle
 
             local label = Instance.new("TextLabel")
             label.Size = UDim2.fromScale(1, 1)
@@ -308,12 +308,19 @@ local function updateESP(safeTiles, borderProbabilities)
             label.Text = string.format("%.0f%%", P * 100)
             label.TextColor3 = Color3.fromRGB(255, 255, 255)
             label.Font = Enum.Font.GothamBold
-            label.TextSize = 11
-            label.Parent = pill
+            label.TextScaled = true -- 百分数自动缩放填满圆圈
+            label.Parent = circle
 
-            pill.Position = UDim2.new(
-                0, math.max(0, (faceW - 52) / 2),
-                0, math.max(0, (faceD - 22) / 2)
+            local pad = Instance.new("UIPadding")
+            pad.PaddingTop = UDim.new(0, 6)
+            pad.PaddingBottom = UDim.new(0, 6)
+            pad.PaddingLeft = UDim.new(0, 4)
+            pad.PaddingRight = UDim.new(0, 4)
+            pad.Parent = label
+
+            circle.Position = UDim2.new(
+                0, math.max(0, (faceW - 44) / 2),
+                0, math.max(0, (faceD - 44) / 2)
             )
 
             -- 跟随玩家视角：按玩家相对方块的方向旋转文字（若反了可把负号去掉）
@@ -321,10 +328,10 @@ local function updateESP(safeTiles, borderProbabilities)
             if root and part.Parent then
                 local dx = root.Position.X - part.Position.X
                 local dz = root.Position.Z - part.Position.Z
-                pill.Rotation = -math.deg(math.atan2(dx, dz))
+                circle.Rotation = -math.deg(math.atan2(dx, dz))
             end
 
-            pill.Parent = sg
+            circle.Parent = sg
             table.insert(probGuis, sg)
             sg.Parent = part -- 必须挂在方块上才会渲染
         end
@@ -890,7 +897,7 @@ local function walkTo(part)
     hum:MoveTo(targetPos)
 
     local startT = os.clock()
-    while (root.Position - targetPos).Magnitude > 1.0 and autoWalkActive do
+    while (root.Position - targetPos).Magnitude > 0.4 and autoWalkActive do
         if os.clock() - startT > 3 then break end
         task.wait()
         hum:MoveTo(targetPos)
@@ -904,14 +911,14 @@ local function walkPath(path)
     if not root or not hum then return end
     hum.WalkSpeed = customWalkSpeed
 
-    -- 只沿安全路径走（已翻开/已插旗的格子），不穿雷区
-    for _, part in ipairs(path) do
+    -- 只沿安全路径走（已翻开/已插旗的格子），不穿雷区；中间节点提前切，最后一步踩实
+    for i, part in ipairs(path) do
         if not autoWalkActive then break end
         local targetPos = Vector3.new(part.Position.X, root.Position.Y, part.Position.Z)
         hum:MoveTo(targetPos)
-        -- 接近当前节点就立刻切下一个：连续移动，不在每格停顿
+        local arriveDist = (i == #path) and 0.4 or 0.85
         local startT = os.clock()
-        while autoWalkActive and (root.Position - targetPos).Magnitude > 0.6 do
+        while autoWalkActive and (root.Position - targetPos).Magnitude > arriveDist do
             if os.clock() - startT > 2 then break end
             task.wait()
         end
