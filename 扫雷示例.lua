@@ -56,6 +56,7 @@ local W, H = 0, 0
 local xToCol, zToRow = {}, {}
 local localFlags = {}
 local deducedBombs = {}
+local probGuis = {}
 
 local espFolder = workspace:FindFirstChild("BotESPFolder")
 if not espFolder then
@@ -219,6 +220,10 @@ end
 -- ============================================
 
 local function clearESP()
+    for _, g in ipairs(probGuis) do
+        if g and g.Parent then g:Destroy() end
+    end
+    probGuis = {}
     espFolder:ClearAllChildren()
 end
 
@@ -276,6 +281,11 @@ local function updateESP(safeTiles, borderProbabilities)
             sg.PixelsPerStud = 50
             sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
+            -- 顶面像素尺寸 = 方块大小 x PixelsPerStud，画布覆盖整个顶面
+            local faceW = part.Size.X * 50
+            local faceD = part.Size.Z * 50
+            sg.CanvasSize = Vector2.new(math.max(faceW, 1), math.max(faceD, 1))
+
             local pill = Instance.new("Frame")
             pill.Size = UDim2.fromOffset(52, 22)
             pill.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -301,9 +311,6 @@ local function updateESP(safeTiles, borderProbabilities)
             label.TextSize = 11
             label.Parent = pill
 
-            -- 顶面像素尺寸 = 方块大小 x PixelsPerStud，居中摆放
-            local faceW = part.Size.X * 50
-            local faceD = part.Size.Z * 50
             pill.Position = UDim2.new(
                 0, math.max(0, (faceW - 52) / 2),
                 0, math.max(0, (faceD - 22) / 2)
@@ -318,7 +325,8 @@ local function updateESP(safeTiles, borderProbabilities)
             end
 
             pill.Parent = sg
-            sg.Parent = espFolder
+            table.insert(probGuis, sg)
+            sg.Parent = part -- 必须挂在方块上才会渲染
         end
     end
 end
@@ -997,29 +1005,33 @@ task.spawn(function()
                     else
                         local key = getSecretKey()
                         if key then
-                            -- Find nearest safe tile by BFS path length
-                            local targetCell = nil
-                            local bestPath = nil
-                            local minPathLen = math.huge
+                            -- 一次性规划路线：走完当前所有可达安全格（只走已翻开/已插旗格，避开雷区）
+                            local route = {}
+                            local startCol, startRow = pCol, pRow
+                            local remaining = {}
+                            for _, cell in pairs(safeTiles) do remaining[cell] = true end
 
-                            for _, cell in pairs(safeTiles) do
-                                local path = findPath(pCol, pRow, cell.col, cell.row)
-                                if path and #path < minPathLen then
-                                    minPathLen = #path
-                                    targetCell = cell
-                                    bestPath = path
+                            for g = 1, 200 do
+                                local best, bestPath, bestLen = nil, nil, math.huge
+                                for cell in pairs(remaining) do
+                                    local path = findPath(startCol, startRow, cell.col, cell.row)
+                                    if path and #path < bestLen then
+                                        bestLen = #path
+                                        best = cell
+                                        bestPath = path
+                                    end
                                 end
+                                if not best then break end
+                                remaining[best] = nil
+                                for _, p in ipairs(bestPath) do table.insert(route, p) end
+                                startCol, startRow = best.col, best.row
                             end
 
-                            if bestPath and targetCell then
-                                navigateTo(targetCell.part, bestPath)
-                                local startWait = os.clock()
-                                while not targetCell.part:FindFirstChild("NumberGui") and
-                                    os.clock() - startWait < 1.0 and autoWalkActive do
-                                    task.wait(0.05)
-                                end
+                            if #route > 0 then
+                                -- 一次性走完整条路线（经过的安全格会依次翻开）
+                                navigateTo(route[#route], route)
                             else
-                                -- Probability guess: lowest mine probability
+                                -- 没有确定安全格：猜最低雷概率的格子
                                 local bestGuessCell = nil
                                 local minProb = math.huge
 
