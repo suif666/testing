@@ -286,30 +286,16 @@ local function updateESP(safeTiles, borderProbabilities)
             local faceD = part.Size.Z * 50
             sg.CanvasSize = Vector2.new(math.max(faceW, 1), math.max(faceD, 1))
 
-            local circle = Instance.new("Frame")
-            circle.Size = UDim2.fromOffset(math.max(faceW, 1), math.max(faceD, 1)) -- 填满整个方块顶面
-            circle.AnchorPoint = Vector2.new(0, 0)
-            circle.Position = UDim2.new(0, 0, 0, 0)
-            circle.BackgroundColor3 = Color3.fromRGB(255, 205, 0) -- 黄色
-            circle.BorderSizePixel = 0
-
-            local corner = Instance.new("UICorner")
-            corner.CornerRadius = UDim.new(0.5, 0) -- 正圆
-            corner.Parent = circle
-
-            local stroke = Instance.new("UIStroke")
-            stroke.Color = color
-            stroke.Thickness = 2
-            stroke.Parent = circle
-
+            -- 概率数字：直接贴在上表面，按玩家摄像机方向旋转
             local label = Instance.new("TextLabel")
-            label.Size = UDim2.fromScale(1, 1)
+            label.Size = UDim2.new(1, 0, 1, 0) -- 填满整个方块顶面
             label.BackgroundTransparency = 1
             label.Text = string.format("%.0f%%", P * 100)
             label.TextColor3 = Color3.fromRGB(255, 248, 200) -- 接近底色的浅黄白，清晰可读
             label.Font = Enum.Font.GothamBold
-            label.TextScaled = true -- 百分数自动缩放填满圆圈
-            label.Parent = circle
+            label.TextScaled = true -- 自动缩放填满方块
+            label.TextStrokeTransparency = 0
+            label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
 
             local pad = Instance.new("UIPadding")
             pad.PaddingTop = UDim.new(0, 5)
@@ -318,15 +304,14 @@ local function updateESP(safeTiles, borderProbabilities)
             pad.PaddingRight = UDim.new(0, 3)
             pad.Parent = label
 
-            -- 跟随玩家视角：按玩家相对方块的方向旋转文字（若反了可把负号去掉）
-            local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-            if root and part.Parent then
-                local dx = root.Position.X - part.Position.X
-                local dz = root.Position.Z - part.Position.Z
-                circle.Rotation = math.deg(math.atan2(dx, dz))
+            -- 朝向系统：根据玩家摄像机的朝向旋转（不是玩家位置）
+            local cam = workspace.CurrentCamera
+            if cam then
+                local look = cam.CFrame.LookVector
+                label.Rotation = math.deg(math.atan2(look.X, look.Z))
             end
 
-            circle.Parent = sg
+            label.Parent = sg
             table.insert(probGuis, sg)
             sg.Parent = part -- 必须挂在方块上才会渲染
         end
