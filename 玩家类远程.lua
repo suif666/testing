@@ -22,10 +22,23 @@ local function getHum()
     return c and c:FindFirstChildOfClass("Humanoid")
 end
 
--- ============ 移动速度 / 跳跃高度（默认一直锁定） ============
+-- ============ 记录游戏初始值（脚本加载时读取，不覆盖游戏设定） ============
+local origWalkSpeed = 16
+local origJumpPower = 50
+local origGravity = workspace.Gravity or 196.2
+do
+    local h = getHum()
+    if h then
+        origWalkSpeed = h.WalkSpeed
+        origJumpPower = h.JumpPower
+    end
+    origGravity = workspace.Gravity or origGravity
+end
+
+-- ============ 移动速度 / 跳跃高度（默认一直锁定，初始值取游戏实际值） ============
 getgenv().SutureMoveCfg = getgenv().SutureMoveCfg or {}
-if getgenv().SutureMoveCfg.WalkSpeed == nil then getgenv().SutureMoveCfg.WalkSpeed = 16 end
-if getgenv().SutureMoveCfg.JumpPower == nil then getgenv().SutureMoveCfg.JumpPower = 50 end
+if getgenv().SutureMoveCfg.WalkSpeed == nil then getgenv().SutureMoveCfg.WalkSpeed = origWalkSpeed end
+if getgenv().SutureMoveCfg.JumpPower == nil then getgenv().SutureMoveCfg.JumpPower = origJumpPower end
 
 local MoveCfg = getgenv().SutureMoveCfg
 
@@ -82,7 +95,7 @@ end)
 -- ============ 玩家增强配置 ============
 local defaultPlayerExtra = {
     InfJump = false, Noclip = false,
-    Spin = false, SpinSpeed = 180, Gravity = 10, GravityLock = false,
+    Spin = false, SpinSpeed = 16, Gravity = origGravity / 19.62, GravityLock = false,
     AirJumps = 0, NoFallDamage = false,
 }
 getgenv().SuturePlayerExtra = getgenv().SuturePlayerExtra or {}
@@ -94,9 +107,9 @@ end
 
 local PlayerExtra = getgenv().SuturePlayerExtra
 
--- 旧版本存的是 196.2 档，转成新的 0~10 档
-if (PlayerExtra.Gravity or 10) > 10 then
-    PlayerExtra.Gravity = 10
+-- 旧版本存的是绝对重力值（如 196.2），转成新的档位
+if (PlayerExtra.Gravity or 10) > 50 then
+    PlayerExtra.Gravity = PlayerExtra.Gravity / 19.62
 end
 
 -- ============ 无限跳跃 / 空中跳跃次数 ============
@@ -237,64 +250,42 @@ end)
 -- ============ UI（折叠分组） ============
 local uiOk, uiErr = pcall(function()
     local moveSec = Tab:Section({ Title = "移动属性", Icon = "settings", Opened = true })
-    local enhanceSec = Tab:Section({ Title = "移动增强", Icon = "user", Opened = true })
-    local physSec = Tab:Section({ Title = "物理效果", Icon = "sliders-horizontal", Opened = true })
-    local otherSec = Tab:Section({ Title = "其他", Icon = "info", Opened = true })
 
-    moveSec:Slider({
+    local walkSpeedSlider = moveSec:Slider({
         Title = "移动速度",
         Desc = "修改并锁定 WalkSpeed，防止被游戏重置",
         Step = 1,
-        Value = { Min = 16, Max = 100, Default = MoveCfg.WalkSpeed or 16 },
+        Value = { Min = 1, Max = 100, Default = MoveCfg.WalkSpeed or origWalkSpeed },
         Callback = function(v)
             MoveCfg.WalkSpeed = tonumber(v) or 16
             applyMovement()
         end
     })
 
-    moveSec:Slider({
+    local jumpPowerSlider = moveSec:Slider({
         Title = "跳跃高度",
         Desc = "修改并锁定 JumpPower，防止被游戏重置",
         Step = 1,
-        Value = { Min = 50, Max = 200, Default = MoveCfg.JumpPower or 50 },
+        Value = { Min = 1, Max = 200, Default = MoveCfg.JumpPower or origJumpPower },
         Callback = function(v)
             MoveCfg.JumpPower = tonumber(v) or 50
             applyMovement()
         end
     })
 
-    moveSec:Button({
-        Title = "恢复默认属性",
-        Desc = "恢复默认速度和跳跃，并继续锁定默认值",
-        Callback = function()
-            MoveCfg.WalkSpeed = 16
-            MoveCfg.JumpPower = 50
-            applyMovement()
-        end
-    })
-
-    enhanceSec:Toggle({
-        Title = "无限跳跃",
-        Desc = "在空中可以连续跳跃，键盘和手机跳跃键都有效",
-        Type = "Checkbox",
-        Value = PlayerExtra.InfJump or false,
-        Callback = function(s)
-            PlayerExtra.InfJump = s
-        end
-    })
-
-    enhanceSec:Slider({
-        Title = "空中跳跃次数",
-        Desc = "0 = 关闭；空中可额外跳跃的次数（无限跳跃开启时优先，不受此限制）",
+    local gravitySlider = moveSec:Slider({
+        Title = "修改重力",
+        Desc = "0 = 无重力，10 = 正常重力(196.2)，移动滑块后持续锁定",
         Step = 1,
-        Value = { Min = 0, Max = 20, Default = PlayerExtra.AirJumps or 0 },
+        Value = { Min = 0, Max = 20, Default = math.floor(PlayerExtra.Gravity or 10) },
         Callback = function(v)
-            PlayerExtra.AirJumps = tonumber(v) or 0
-            airJumpsUsed = 0
+            PlayerExtra.Gravity = tonumber(v) or 10
+            PlayerExtra.GravityLock = true
+            pcall(applyGravity)
         end
     })
 
-    enhanceSec:Toggle({
+    moveSec:Toggle({
         Title = "穿墙（Noclip）",
         Desc = "移动时无视碰撞，停止移动恢复碰撞，关闭后全部恢复",
         Type = "Checkbox",
@@ -307,39 +298,58 @@ local uiOk, uiErr = pcall(function()
         end
     })
 
-    physSec:Slider({
-        Title = "修改重力",
-        Desc = "0 = 无重力，10 = 正常重力(196.2)，中间按比例，移动滑块后持续锁定",
-        Step = 1,
-        Value = { Min = 0, Max = 10, Default = PlayerExtra.Gravity or 10 },
-        Callback = function(v)
-            PlayerExtra.Gravity = tonumber(v) or 10
-            PlayerExtra.GravityLock = true
-            pcall(applyGravity)
-        end
-    })
-
-    physSec:Button({
-        Title = "恢复默认重力",
-        Desc = "停止锁定并恢复正常重力",
+    moveSec:Button({
+        Title = "恢复玩家初始属性",
+        Desc = "恢复成脚本加载前游戏的速度、跳跃和重力",
         Callback = function()
+            MoveCfg.WalkSpeed = origWalkSpeed
+            MoveCfg.JumpPower = origJumpPower
             PlayerExtra.GravityLock = false
-            PlayerExtra.Gravity = 10
-            workspace.Gravity = 196.2
+            PlayerExtra.Gravity = origGravity / 19.62
+            workspace.Gravity = origGravity
+            applyMovement()
+            pcall(function()
+                walkSpeedSlider:Set(origWalkSpeed)
+                jumpPowerSlider:Set(origJumpPower)
+                gravitySlider:Set(math.floor(origGravity / 19.62))
+            end)
         end
     })
 
-    physSec:Slider({
-        Title = "旋转速度",
-        Desc = "数值越高转得越快",
+    moveSec:Toggle({
+        Title = "无限跳跃",
+        Desc = "在空中可以连续跳跃，键盘和手机跳跃键都有效",
+        Type = "Checkbox",
+        Value = PlayerExtra.InfJump or false,
+        Callback = function(s)
+            PlayerExtra.InfJump = s
+        end
+    })
+
+    moveSec:Slider({
+        Title = "空中跳跃次数",
+        Desc = "0 = 关闭；空中可额外跳跃的次数（无限跳跃开启时优先，不受此限制）",
         Step = 1,
-        Value = { Min = 0, Max = 720, Default = PlayerExtra.SpinSpeed or 180 },
+        Value = { Min = 0, Max = 20, Default = PlayerExtra.AirJumps or 0 },
         Callback = function(v)
-            PlayerExtra.SpinSpeed = tonumber(v) or 180
+            PlayerExtra.AirJumps = tonumber(v) or 0
+            airJumpsUsed = 0
         end
     })
 
-    physSec:Toggle({
+    moveSec:Input({
+        Title = "旋转速度",
+        Desc = "自定义旋转速度，输入数字后生效",
+        Placeholder = "默认 16",
+        Callback = function(value)
+            local n = tonumber(value)
+            if n then
+                PlayerExtra.SpinSpeed = n
+            end
+        end
+    })
+
+    moveSec:Toggle({
         Title = "人物旋转",
         Desc = "开启后角色持续旋转",
         Type = "Checkbox",
@@ -353,7 +363,7 @@ local uiOk, uiErr = pcall(function()
         end
     })
 
-    otherSec:Toggle({
+    moveSec:Toggle({
         Title = "无伤坠落",
         Desc = "隐形保护罩，免疫坠落伤害（同时也会免疫其他伤害）",
         Type = "Checkbox",
@@ -364,7 +374,7 @@ local uiOk, uiErr = pcall(function()
         end
     })
 
-    otherSec:Button({
+    moveSec:Button({
         Title = "重置角色",
         Desc = "让自己的角色重生",
         Callback = function()
