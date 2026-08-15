@@ -275,45 +275,25 @@ local function updateESP(safeTiles, borderProbabilities)
             box.SurfaceTransparency = 0.6
             box.Parent = espFolder
 
-            -- 概率标签：平躺贴在方块上表面，跟随玩家视角旋转角度
-            local sg = Instance.new("SurfaceGui")
-            sg.Face = Enum.NormalId.Top
-            sg.PixelsPerStud = 50
-            sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+            -- 概率标签：大号彩色数字悬浮在方块上方，始终朝向摄像机（远处也清晰）
+            local bb = Instance.new("BillboardGui")
+            bb.Size = UDim2.new(0, 100, 0, 40)
+            bb.AlwaysOnTop = true
+            bb.Adornee = part
+            bb.StudsOffset = Vector3.new(0, 3, 0)
 
-            -- 顶面像素尺寸 = 方块大小 x PixelsPerStud，画布覆盖整个顶面
-            local faceW = part.Size.X * 50
-            local faceD = part.Size.Z * 50
-            sg.CanvasSize = Vector2.new(math.max(faceW, 1), math.max(faceD, 1))
-
-            -- 概率数字：直接贴在上表面，按玩家摄像机方向旋转
             local label = Instance.new("TextLabel")
             label.Size = UDim2.new(1, 0, 1, 0) -- 填满整个方块顶面
             label.BackgroundTransparency = 1
             label.Text = string.format("%.0f%%", P * 100)
-            label.TextColor3 = Color3.fromRGB(255, 248, 200) -- 接近底色的浅黄白，清晰可读
-            label.Font = Enum.Font.GothamBlack -- 最粗字体，远处也清晰
-            label.TextScaled = true -- 自动缩放填满方块
+            label.TextColor3 = color
+            label.Font = Enum.Font.GothamBold
+            label.TextSize = 26
             label.TextStrokeTransparency = 0
             label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-
-            local pad = Instance.new("UIPadding")
-            pad.PaddingTop = UDim.new(0, 3)
-            pad.PaddingBottom = UDim.new(0, 3)
-            pad.PaddingLeft = UDim.new(0, 2)
-            pad.PaddingRight = UDim.new(0, 2)
-            pad.Parent = label
-
-            -- 朝向系统：根据玩家摄像机的朝向旋转（不是玩家位置）
-            local cam = workspace.CurrentCamera
-            if cam then
-                local look = cam.CFrame.LookVector
-                label.Rotation = -math.deg(math.atan2(look.X, look.Z))
-            end
-
-            label.Parent = sg
-            table.insert(probGuis, sg)
-            sg.Parent = part -- 必须挂在方块上才会渲染
+            label.Parent = bb
+            table.insert(probGuis, bb)
+            bb.Parent = espFolder
         end
     end
 end
@@ -1012,31 +992,19 @@ task.spawn(function()
         if openedCount > 0 then
             local key = getSecretKey()
             if key and not lastDeducedNewBomb then
-                -- 用主循环算出的最新安全格，一次性规划路线走完
-                local safeTiles = lastSafeTiles or {}
-                local route = {}
-                local startCol, startRow = pCol, pRow
-                local remaining = {}
-                for _, cell in pairs(safeTiles) do remaining[cell] = true end
-
-                for g = 1, 200 do
-                    local best, bestPath, bestLen = nil, nil, math.huge
-                    for cell in pairs(remaining) do
-                        local path = findPath(startCol, startRow, cell.col, cell.row)
-                        if path and #path < bestLen then
-                            bestLen = #path
-                            best = cell
-                            bestPath = path
-                        end
+                -- 每次只挑当前最近的安全格（主循环实时刷新安全格，永远先踩近的）
+                local bestCell, bestPath, bestLen = nil, nil, math.huge
+                for _, cell in pairs(lastSafeTiles or {}) do
+                    local path = findPath(pCol, pRow, cell.col, cell.row)
+                    if path and #path < bestLen then
+                        bestLen = #path
+                        bestCell = cell
+                        bestPath = path
                     end
-                    if not best then break end
-                    remaining[best] = nil
-                    for _, p in ipairs(bestPath) do table.insert(route, p) end
-                    startCol, startRow = best.col, best.row
                 end
 
-                if #route > 0 then
-                    navigateTo(route[#route], route)
+                if bestCell and bestPath then
+                    navigateTo(bestCell.part, bestPath)
                 else
                     -- 没有确定安全格：猜最低雷概率的格子
                     local bestGuessCell = nil
