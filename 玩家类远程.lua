@@ -212,23 +212,47 @@ RunService.Heartbeat:Connect(function(step)
     end
 end)
 
--- ============ 无伤坠落 ============
+-- ============ 无伤坠落（位移平滑方案：借鉴夜脚本方案2，兼容所有直接扣血游戏） ============
+-- 原理：Heartbeat 每帧监测 Y 轴位移，下坠超过阈值时把下落速度限制到安全值，
+--      避免高速落地触发坠落伤害。即使游戏不用 Humanoid.FallDamage 事件也能生效。
+local noFallConn = nil
 local function applyNoFallDamage(on)
     local char = lp.Character
     if not char then return end
     if on then
-        if not char:FindFirstChildOfClass("ForceField") then
-            local ff = Instance.new("ForceField")
-            ff.Visible = false
-            ff.Parent = char
+        -- 先断开旧连接（角色重生/切换角色后需重建）
+        if noFallConn then
+            pcall(function() noFallConn:Disconnect() end)
+            noFallConn = nil
         end
-    else
-        for _, ff in ipairs(char:GetDescendants()) do
-            if ff:IsA("ForceField") and not ff.Visible then
-                pcall(function()
-                    ff:Destroy()
-                end)
+        local root = char:FindFirstChild("HumanoidRootPart")
+        if not root then return end
+        local lastY = root.Position.Y
+        noFallConn = game:GetService("RunService").Heartbeat:Connect(function()
+            if not noFallConn then return end
+            local c = lp.Character
+            local r = c and c:FindFirstChild("HumanoidRootPart")
+            if not c or not r or r ~= root then return end  -- 角色已换
+            if not c.Parent then return end
+
+            local cur = r.Position
+            -- 下坠超过阈值，把下落速度限制为 -10（安全落地速度，不触发坠落伤害）
+            local fallDist = lastY - cur.Y
+            if fallDist >= 12 then
+                local vel = r.AssemblyLinearVelocity
+                if vel.Y < -10 then
+                    r.AssemblyLinearVelocity = Vector3.new(vel.X, -10, vel.Z)
+                end
             end
+            -- 上升时刷新安全高度参照
+            if cur.Y > lastY then
+                lastY = cur.Y
+            end
+        end)
+    else
+        if noFallConn then
+            pcall(function() noFallConn:Disconnect() end)
+            noFallConn = nil
         end
     end
 end
@@ -365,7 +389,7 @@ local uiOk, uiErr = pcall(function()
 
     moveSec:Toggle({
         Title = "无伤坠落",
-        Desc = "隐形保护罩，免疫坠落伤害（同时也会免疫其他伤害）",
+        Desc = "下坠速度受限，避免坠落伤害（位移监测方案）",
         Type = "Checkbox",
         Value = PlayerExtra.NoFallDamage or false,
         Callback = function(s)
