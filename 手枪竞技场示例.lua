@@ -1,22 +1,16 @@
--- 手枪竞技场 Ragebot（WindUI 独立版）
--- 移植自 XIAOXI付费版，只保留核心：自动锁定最近目标 + 子弹追踪 + 伤害直注
--- 用法：在手枪竞技场游戏里直接执行本脚本
+-- 手枪竞技场 Ragebot（远程脚本格式，挂主脚本"手枪竞技场" Tab）
+-- 主脚本需设置：getgenv().Tabs.SQJJC（或 getgenv().SutureSQJJC）
 
 if getgenv().__SUTURE_FFA_RAGEBOT_LOADED then
     return
 end
 getgenv().__SUTURE_FFA_RAGEBOT_LOADED = true
 
--- ==================== WindUI 加载 ====================
-local WindUI
-local ok, res = pcall(function()
-    return loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
-end)
-if not ok then
-    warn("[Ragebot] WindUI 加载失败:", res)
+local Tab = (getgenv().Tabs and getgenv().Tabs.SQJJC) or getgenv().SutureSQJJC
+if not Tab then
+    warn("[Ragebot] 未找到 Tab，请检查主脚本赋值")
     return
 end
-WindUI = res
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -291,35 +285,15 @@ if getgenv().ffaRagebotConnection then
     getgenv().ffaRagebotConnection = nil
 end
 
--- ==================== 窗口 ====================
-local win = WindUI:CreateWindow({
-    Title = "手枪竞技场 Ragebot",
-    Icon = "crosshair",
-    Author = "WindUI 移植版",
-    Folder = "FFARagebot",
-    Size = UDim2.fromOffset(520, 400),
-    MinSize = Vector2.new(440, 300),
-    MaxSize = Vector2.new(760, 520),
-    ToggleKey = Enum.KeyCode.RightShift,
-    Transparent = true,
-    Theme = "Dark",
-    Resizable = true,
-    SideBarWidth = 150,
-    HideSearchBar = false,
-    ScrollBarEnabled = true,
-    NewElements = true,
-    User = { Enabled = false }
-})
+-- ==================== UI（挂在主脚本"手枪竞技场" Tab 下） ====================
+local sec = Tab:Section({ Title = "Ragebot 自动锁定", Icon = "settings", Opened = true })
 
-local tab = win:Tab({ Title = "Ragebot", Icon = "crosshair", Locked = false })
-local sec = tab:Section({ Title = "自动锁定 + 子弹追踪", Icon = "settings", Opened = true })
-
-tab:Paragraph({
+Tab:Paragraph({
     Title = "说明",
     Desc = "自动锁定最近敌人，模拟开枪并直注伤害\n射速慢一点更安全（默认 1 秒/发）"
 })
 
-tab:Toggle({
+Tab:Toggle({
     Title = "启用 Ragebot",
     Desc = "开启后自动瞄准并射击最近目标",
     Type = "Checkbox",
@@ -344,7 +318,7 @@ tab:Toggle({
     end
 })
 
-tab:Slider({
+Tab:Slider({
     Title = "射击间隔 (秒/发)",
     Desc = "越小射得越快，越容易被检测",
     Step = 0.1,
@@ -354,7 +328,7 @@ tab:Slider({
     end
 })
 
-tab:Toggle({
+Tab:Toggle({
     Title = "强制爆头",
     Desc = "只瞄准头部",
     Type = "Checkbox",
@@ -364,7 +338,7 @@ tab:Toggle({
     end
 })
 
-tab:Toggle({
+Tab:Toggle({
     Title = "无视墙壁",
     Desc = "关闭墙壁检测（穿墙打人，更容易被检测）",
     Type = "Checkbox",
@@ -374,5 +348,4 @@ tab:Toggle({
     end
 })
 
-print("[Ragebot] 手枪竞技场 Ragebot 已加载")
-warn("[Ragebot] 检测到此服务器手枪竞技场")
+print("[Ragebot] 手枪竞技场 Ragebot 已挂载")
