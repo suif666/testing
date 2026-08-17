@@ -169,6 +169,35 @@ local function createBeam(startPos, endPos)
     end)
 end
 
+-- ==================== 视野判断（只打屏幕内能看到的目标） ====================
+local VIEW_MARGIN = 50 -- 屏幕边缘留 50px 余量，避免打到贴边目标
+local useAimbotFov = true -- 是否适配主脚本自瞄类的 FOV 圈（选项，可在 UI 关闭）
+
+local function isInView(targetPos)
+    local cam = Workspace.CurrentCamera
+    if not cam then return true end
+    local screenPos, onScreen = cam:WorldToScreenPoint(targetPos)
+    -- onScreen=false 表示在相机背后（或不可见），直接排除
+    if not onScreen then return false end
+    local vp = cam.ViewportSize
+    if screenPos.X < -VIEW_MARGIN or screenPos.X > vp.X + VIEW_MARGIN
+        or screenPos.Y < -VIEW_MARGIN or screenPos.Y > vp.Y + VIEW_MARGIN then
+        return false
+    end
+    -- 适配主脚本自瞄类的 FOV 圈：圈外（到屏幕中心距离 > Fov 半径）的目标不打
+    if useAimbotFov then
+        local aim = getgenv().SutureAimbot
+        if aim and aim.Fov and aim.Fov > 0 then
+            local center = vp / 2
+            local screenDist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+            if screenDist > aim.Fov then
+                return false
+            end
+        end
+    end
+    return true
+end
+
 -- ==================== 目标获取 ====================
 local function getAvailableTargets()
     local targets = {}
@@ -195,6 +224,11 @@ local function getAvailableTargets()
                         targetPart = head
                         targetPos = head.Position
                     end
+                end
+
+                -- 只打视野内的目标（背后的、屏幕外的排除）
+                if not isInView(targetPos) then
+                    continue
                 end
 
                 local hasWall = checkWallBetween(myPosition, targetPos, targetChar)
@@ -290,7 +324,7 @@ local sec = Tab:Section({ Title = "Ragebot 自动锁定", Icon = "settings", Ope
 
 Tab:Paragraph({
     Title = "说明",
-    Desc = "自动锁定最近敌人，模拟开枪并直注伤害\n射速慢一点更安全（默认 1 秒/发）"
+    Desc = "自动锁定视野内的最近敌人，模拟开枪并直注伤害\n背后的/屏幕外的目标不会打（默认 1 秒/发更安全）"
 })
 
 Tab:Toggle({
@@ -345,6 +379,16 @@ Tab:Toggle({
     Value = false,
     Callback = function(state)
         wallCheckEnabled = not state
+    end
+})
+
+Tab:Toggle({
+    Title = "适配自瞄 FOV 圈",
+    Desc = "配合主脚本自瞄类的 FOV 圈，圈外目标不打（需自瞄类已加载）",
+    Type = "Checkbox",
+    Value = true,
+    Callback = function(v)
+        useAimbotFov = v
     end
 })
 
