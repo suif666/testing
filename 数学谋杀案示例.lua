@@ -1,22 +1,16 @@
--- 数学谋杀案 自动答题（WindUI 独立版）
--- 移植自 XIAOXI付费版数学谋杀案，UI 换成 WindUI
--- 用法：在数学谋杀案游戏里直接执行本脚本
+-- 数学谋杀案 自动答题（远程脚本格式，挂主脚本"数学谋杀案" Tab）
+-- 主脚本需设置：getgenv().Tabs.SXMSATab（或 getgenv().SutureSXMSATab）
 
 if getgenv().__SUTURE_MATH_MURDER_LOADED then
     return
 end
 getgenv().__SUTURE_MATH_MURDER_LOADED = true
 
--- ==================== WindUI 加载 ====================
-local WindUI
-local ok, res = pcall(function()
-    return loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
-end)
-if not ok then
-    warn("[数学谋杀案] WindUI 加载失败:", res)
+local Tab = (getgenv().Tabs and getgenv().Tabs.SXMSATab) or getgenv().SutureSXMSATab
+if not Tab then
+    warn("[数学谋杀案] 未找到 Tab，请检查主脚本赋值")
     return
 end
-WindUI = res
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -49,7 +43,7 @@ local function initGameRefs()
 end
 
 if not initGameRefs() then
-    warn("[数学谋杀案] 未找到游戏界面（workspace.Map.Functional.Screen），请确认在数学谋杀案游戏里执行")
+    warn("[数学谋杀案] 未找到游戏界面（workspace.Map.Functional.Screen），请确认在数学谋杀案游戏里")
     return
 end
 
@@ -117,37 +111,16 @@ end
 local Connections = {}
 getgenv().mathMurderConnections = Connections
 
--- ==================== 窗口 ====================
-local win = WindUI:CreateWindow({
-    Title = "数学谋杀案 自动答题",
-    Icon = "calculator",
-    Author = "WindUI 移植版",
-    Folder = "MathMurder",
-    Size = UDim2.fromOffset(560, 420),
-    MinSize = Vector2.new(480, 320),
-    MaxSize = Vector2.new(800, 560),
-    ToggleKey = Enum.KeyCode.RightShift,
-    Transparent = true,
-    Theme = "Dark",
-    Resizable = true,
-    SideBarWidth = 160,
-    HideSearchBar = false,
-    ScrollBarEnabled = true,
-    NewElements = true,
-    User = { Enabled = false }
-})
+-- ==================== UI（挂在主脚本"数学谋杀案" Tab 下） ====================
+local sec1 = Tab:Section({ Title = "自动答题模式", Icon = "settings", Opened = true })
 
--- ==================== Tab1：秒回答 ====================
-local tab1 = win:Tab({ Title = "秒回答", Icon = "zap", Locked = false })
-local sec1 = tab1:Section({ Title = "立即回答", Icon = "settings", Opened = true })
-
-tab1:Paragraph({
+Tab:Paragraph({
     Title = "说明",
-    Desc = "成为数学大手😍"
+    Desc = "题目出现后自动计算并模拟真人打字回答\n四种模式互斥，任选其一开启"
 })
 
-tab1:Toggle({
-    Title = "启用秒回答",
+Tab:Toggle({
+    Title = "秒回答",
     Desc = "题目出现后立即计算并回答（随机延迟 0.1~0.3 秒）",
     Type = "Checkbox",
     Value = false,
@@ -163,18 +136,9 @@ tab1:Toggle({
     end
 })
 
--- ==================== Tab2：演戏回答（6秒） ====================
-local tab2 = win:Tab({ Title = "演戏回答", Icon = "clapperboard", Locked = false })
-local sec2 = tab2:Section({ Title = "在六秒后自动回答", Icon = "settings", Opened = true })
-
-tab2:Paragraph({
-    Title = "说明",
-    Desc = "演戏回答防止别人看出你是挂"
-})
-
-tab2:Toggle({
-    Title = "启用演戏回答",
-    Desc = "等 6 秒再回答",
+Tab:Toggle({
+    Title = "演戏回答（6秒）",
+    Desc = "等 6 秒再回答，防止被看出是挂",
     Type = "Checkbox",
     Value = false,
     Callback = function(v)
@@ -189,18 +153,9 @@ tab2:Toggle({
     end
 })
 
--- ==================== Tab3：最后一刻回答（9秒） ====================
-local tab3 = win:Tab({ Title = "最后一刻", Icon = "timer", Locked = false })
-local sec3 = tab3:Section({ Title = "在最后一秒回答", Icon = "settings", Opened = true })
-
-tab3:Paragraph({
-    Title = "说明",
-    Desc = "装逼专属，在最后一秒直接回答正确答案"
-})
-
-tab3:Toggle({
-    Title = "启用在最后一秒回答",
-    Desc = "等 9 秒压线回答",
+Tab:Toggle({
+    Title = "最后一刻回答（9秒）",
+    Desc = "等 9 秒压线回答（装逼专属）",
     Type = "Checkbox",
     Value = false,
     Callback = function(v)
@@ -215,17 +170,8 @@ tab3:Toggle({
     end
 })
 
--- ==================== Tab4：自定义延迟 ====================
-local tab4 = win:Tab({ Title = "自定义", Icon = "settings-2", Locked = false })
-local sec4 = tab4:Section({ Title = "自定义回答", Icon = "settings", Opened = true })
-
-tab4:Paragraph({
-    Title = "说明",
-    Desc = "可自定义输入回答速度"
-})
-
-tab4:Toggle({
-    Title = "启用自定义回答",
+Tab:Toggle({
+    Title = "自定义回答",
     Desc = "按你设置的秒数延迟回答",
     Type = "Checkbox",
     Value = false,
@@ -241,8 +187,8 @@ tab4:Toggle({
     end
 })
 
-tab4:Slider({
-    Title = "在几秒回答",
+Tab:Slider({
+    Title = "自定义延迟秒数",
     Desc = "1 ~ 9 秒",
     Step = 0.5,
     Value = { Min = 1, Max = 9, Default = 5 },
@@ -251,11 +197,10 @@ tab4:Slider({
     end
 })
 
--- ==================== Tab5：设置（拟人化） ====================
-local tabS = win:Tab({ Title = "设置", Icon = "sliders-horizontal", Locked = false })
-local secS = tabS:Section({ Title = "拟人化设置", Icon = "settings", Opened = true })
+-- ==================== 拟人化设置 ====================
+local sec2 = Tab:Section({ Title = "拟人化设置", Icon = "settings", Opened = true })
 
-tabS:Slider({
+Tab:Slider({
     Title = "打字速度 (秒/字符)",
     Desc = "越小打得越快（0.01 最快）",
     Step = 0.01,
@@ -265,7 +210,7 @@ tabS:Slider({
     end
 })
 
-tabS:Slider({
+Tab:Slider({
     Title = "重大错误概率 (%)",
     Desc = "模拟打错字再改，越高越像真人",
     Step = 1,
@@ -275,7 +220,7 @@ tabS:Slider({
     end
 })
 
-tabS:Toggle({
+Tab:Toggle({
     Title = "即时提交",
     Desc = "输完即交（不勾选则等游戏触发提交）",
     Type = "Checkbox",
@@ -352,5 +297,4 @@ table.insert(Connections, QuestionText:GetPropertyChangedSignal("Text"):Connect(
     end
 end))
 
-print("[数学谋杀案] WindUI 版已加载")
-warn("[数学谋杀案] 检测到此服务器数学谋杀案")
+print("[数学谋杀案] 自动答题已挂载")
