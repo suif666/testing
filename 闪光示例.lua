@@ -1,22 +1,16 @@
--- 闪光 自瞄 + 弹道（WindUI 独立版）
--- 移植自小西源码/闪光.lua：视角自瞄 AimBot + 子弹追踪 Ragebot
--- 用法：在对应游戏里直接执行本脚本
+-- 闪光 Ragebot（远程脚本格式，挂主脚本"闪光" Tab）
+-- 主脚本需设置：getgenv().Tabs.SGTab（或 getgenv().SutureSGTab）
 
-if getgenv().__SUTURE_FLASH_LOADED then
+if getgenv().__SUTURE_FLASH_RAGEBOT_LOADED then
     return
 end
-getgenv().__SUTURE_FLASH_LOADED = true
+getgenv().__SUTURE_FLASH_RAGEBOT_LOADED = true
 
--- ==================== WindUI 加载 ====================
-local WindUI
-local ok, res = pcall(function()
-    return loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
-end)
-if not ok then
-    warn("[闪光] WindUI 加载失败:", res)
+local Tab = (getgenv().Tabs and getgenv().Tabs.SGTab) or getgenv().SutureSGTab
+if not Tab then
+    warn("[闪光Ragebot] 未找到 Tab，请检查主脚本赋值")
     return
 end
-WindUI = res
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -25,221 +19,41 @@ local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
--- ==================== 自瞄配置 ====================
-local AimSettings = {
-    Enabled = false,
-    FOV = 100,
-    Smoothness = 10,
-    CrosshairDistance = 5,
-    FOVColor = Color3.fromRGB(0, 255, 0),
-    FriendCheck = true,
-    WallCheck = true,
-    TeamCheck = false,
-    TargetPlayer = nil,
-    TargetAll = true,
-    FOVRainbowEnabled = true,
-    FOVRainbowSpeed = 8,
-    FOVEnabled = true
-}
-local AimTargetPart = "头"
-
--- ==================== 自瞄辅助 ====================
-local FOVCircle = nil
-local CurrentFOVHue = 0
-local CurrentTarget = nil
-local AimConnection = nil
-
-local function GetRainbowColor(hue)
-    local h = hue % 1
-    local r, g, b
-    if h < 1 / 6 then
-        r, g, b = 1, h * 6, 0
-    elseif h < 2 / 6 then
-        r, g, b = 1 - (h - 1 / 6) * 6, 1, 0
-    elseif h < 3 / 6 then
-        r, g, b = 0, 1, (h - 2 / 6) * 6
-    elseif h < 4 / 6 then
-        r, g, b = 0, 1 - (h - 3 / 6) * 6, 1
-    elseif h < 5 / 6 then
-        r, g, b = (h - 4 / 6) * 6, 0, 1
-    else
-        r, g, b = 1, 0, 1 - (h - 5 / 6) * 6
-    end
-    return Color3.fromRGB(r * 255, g * 255, b * 255)
-end
-
-local function IsFriend(player)
-    if not AimSettings.FriendCheck then
-        return false
-    end
-    local success, result = pcall(function()
-        return LocalPlayer:IsFriendsWith(player.UserId)
-    end)
-    return success and result
-end
-
-local function WallCheck(targetPosition, targetCharacter)
-    if not AimSettings.WallCheck then
-        return true
-    end
-    local success, result = pcall(function()
-        local origin = Camera.CFrame.Position
-        local direction = (targetPosition - origin).Unit
-        local distance = (targetPosition - origin).Magnitude
-        local rayParams = RaycastParams.new()
-        rayParams.FilterDescendantsInstances = { LocalPlayer.Character, targetCharacter }
-        rayParams.FilterType = Enum.RaycastFilterType.Blacklist
-        rayParams.IgnoreWater = true
-        rayParams.CollisionGroup = "Default"
-        local ray = Workspace:Raycast(origin, direction * distance, rayParams)
-        return ray == nil
-    end)
-    return success and result
-end
-
-local function GetTargetPosition(character, partName)
-    if not character then return nil end
-    local part
-    if partName == "头" then
-        part = character:FindFirstChild("Head")
-    elseif partName == "上身" then
-        part = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso") or character:FindFirstChild("HumanoidRootPart")
-    elseif partName == "左腿" then
-        part = character:FindFirstChild("Left Leg") or character:FindFirstChild("LeftLowerLeg") or character:FindFirstChild("LeftUpperLeg")
-    elseif partName == "右腿" then
-        part = character:FindFirstChild("Right Leg") or character:FindFirstChild("RightLowerLeg") or character:FindFirstChild("RightUpperLeg")
-    elseif partName == "裆部" then
-        part = character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("LowerTorso")
-    elseif partName == "胸部" then
-        part = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
-    else
-        part = character:FindFirstChild("Head")
-    end
-    return part and part.Position
-end
-
--- ==================== 最近目标（FOV 圈内） ====================
-local function GetClosestPlayer()
-    local camera = Camera
-    local mousePos = camera.ViewportSize / 2
-    local nearestPlayer = nil
-    local shortestDistance = AimSettings.FOV
-
-    if CurrentTarget and CurrentTarget ~= LocalPlayer and CurrentTarget.Character then
-        local hrp = CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
-        local humanoid = CurrentTarget.Character:FindFirstChild("Humanoid")
-        if hrp and humanoid and humanoid.Health > 0 then
-            local screenPos, onScreen = camera:WorldToViewportPoint(hrp.Position)
-            if onScreen then
-                local distance = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
-                if distance <= AimSettings.FOV and WallCheck(hrp.Position, CurrentTarget.Character) then
-                    if not AimSettings.FriendCheck or not IsFriend(CurrentTarget) then
-                        if not AimSettings.TeamCheck or not (LocalPlayer.Team and CurrentTarget.Team == LocalPlayer.Team) then
-                            return CurrentTarget
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    CurrentTarget = nil
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
-            local skip = false
-            if AimSettings.FriendCheck and IsFriend(player) then
-                skip = true
-            end
-            if not skip and AimSettings.TeamCheck and LocalPlayer.Team and player.Team == LocalPlayer.Team then
-                skip = true
-            end
-            if not skip then
-                local humanoidRootPart = player.Character:FindFirstChild("HumanoidRootPart")
-                local humanoid = player.Character:FindFirstChild("Humanoid")
-                if humanoidRootPart and humanoid and humanoid.Health > 0 then
-                    if WallCheck(humanoidRootPart.Position, player.Character) then
-                        local screenPos, onScreen = camera:WorldToViewportPoint(humanoidRootPart.Position)
-                        if onScreen then
-                            local distance = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
-                            if distance < shortestDistance then
-                                shortestDistance = distance
-                                nearestPlayer = player
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-    if nearestPlayer then
-        CurrentTarget = nearestPlayer
-    end
-    return nearestPlayer
-end
-
--- ==================== 视角自瞄 ====================
-local function AimBot()
-    if not AimSettings.Enabled then
-        return
-    end
-    pcall(function()
-        local target = GetClosestPlayer()
-        if target and target.Character then
-            local humanoidRootPart = target.Character:FindFirstChild("HumanoidRootPart")
-            local head = target.Character:FindFirstChild("Head")
-            local targetPosition = GetTargetPosition(target.Character, AimTargetPart) or (head and head.Position) or (humanoidRootPart and humanoidRootPart.Position)
-            if not targetPosition then return end
-            if humanoidRootPart then
-                local targetVelocity = humanoidRootPart.Velocity
-                if AimSettings.CrosshairDistance > 0 then
-                    local distance = (targetPosition - Camera.CFrame.Position).Magnitude
-                    local timeToTarget = distance / 1000
-                    targetPosition = targetPosition + (targetVelocity * timeToTarget * AimSettings.CrosshairDistance)
-                end
-            end
-            local currentCFrame = Camera.CFrame
-            local targetCFrame = CFrame.new(currentCFrame.Position, targetPosition)
-            local smoothedCFrame = currentCFrame:Lerp(targetCFrame, 1 / AimSettings.Smoothness)
-            Camera.CFrame = smoothedCFrame
-        end
-    end)
-end
-
--- ==================== FOV 圈（Drawing 库） ====================
-local function InitializeAimDrawings()
-    pcall(function()
-        if not FOVCircle and Drawing then
-            FOVCircle = Drawing.new("Circle")
-            FOVCircle.Visible = AimSettings.Enabled and AimSettings.FOVEnabled
-            FOVCircle.Thickness = 2
-            FOVCircle.Filled = false
-            FOVCircle.Radius = AimSettings.FOV
-            FOVCircle.Position = Camera.ViewportSize / 2
-        end
-    end)
-end
-
-local function UpdateFOVCircle()
-    pcall(function()
-        if FOVCircle then
-            FOVCircle.Visible = AimSettings.Enabled and AimSettings.FOVEnabled
-            FOVCircle.Radius = AimSettings.FOV
-            if AimSettings.FOVRainbowEnabled then
-                FOVCircle.Color = GetRainbowColor(CurrentFOVHue)
-            else
-                FOVCircle.Color = AimSettings.FOVColor
-            end
-            FOVCircle.Position = Camera.ViewportSize / 2
-        end
-    end)
-end
-
--- ==================== Ragebot（子弹追踪） ====================
+-- ==================== 设置 ====================
 local ragebotEnabled = false
 local currentTarget = nil
 local lastShotTime = 0
 local connection = nil
+local fireRateValue = 0.56        -- 射击间隔（秒/发，原版固定 0.56）
+local useAimbotFov = true         -- 适配主脚本自瞄类 FOV 圈（选项）
 
+-- ==================== 视野判断（只打屏幕内能看到的目标） ====================
+local VIEW_MARGIN = 50
+local function isInView(targetPos)
+    local cam = Camera
+    if not cam then return true end
+    local screenPos, onScreen = cam:WorldToScreenPoint(targetPos)
+    if not onScreen then return false end
+    local vp = cam.ViewportSize
+    if screenPos.X < -VIEW_MARGIN or screenPos.X > vp.X + VIEW_MARGIN
+        or screenPos.Y < -VIEW_MARGIN or screenPos.Y > vp.Y + VIEW_MARGIN then
+        return false
+    end
+    -- 适配主脚本自瞄类的 FOV 圈：圈外目标不打
+    if useAimbotFov then
+        local aim = getgenv().SutureAimbot
+        if aim and aim.Fov and aim.Fov > 0 then
+            local center = vp / 2
+            local screenDist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+            if screenDist > aim.Fov then
+                return false
+            end
+        end
+    end
+    return true
+end
+
+-- ==================== 工具 ====================
 local function getVisiblePart(targetCharacter)
     if not targetCharacter or not LocalPlayer.Character then return nil end
     local localCharacter = LocalPlayer.Character
@@ -365,9 +179,10 @@ local function createBeam(startPos, endPos)
     end)
 end
 
+-- ==================== 射击（子弹追踪直注） ====================
 local function shoot(player, targetPart, targetPos, origin)
     local currentTime = tick()
-    if currentTime - lastShotTime < 0.56 then return false end
+    if currentTime - lastShotTime < fireRateValue then return false end
 
     local character = LocalPlayer.Character
     if not character or not targetPart or not origin then return false end
@@ -401,6 +216,7 @@ local function shoot(player, targetPart, targetPos, origin)
     return true
 end
 
+-- ==================== 可见目标 ====================
 local function getVisibleTargets()
     local targets = {}
     local character = LocalPlayer.Character
@@ -415,13 +231,16 @@ local function getVisibleTargets()
         if player ~= LocalPlayer and not isDead(player) and player.Character then
             local visiblePart, visiblePos, originPos = getVisiblePart(player.Character)
             if visiblePart and visiblePos and originPos then
-                table.insert(targets, {
-                    player = player,
-                    distance = (visiblePos - origin).Magnitude,
-                    part = visiblePart,
-                    position = visiblePos,
-                    origin = originPos
-                })
+                -- 只打视野内（屏幕内 + 自瞄 FOV 圈内）的目标
+                if isInView(visiblePos) then
+                    table.insert(targets, {
+                        player = player,
+                        distance = (visiblePos - origin).Magnitude,
+                        part = visiblePart,
+                        position = visiblePos,
+                        origin = originPos
+                    })
+                end
             end
         end
     end
@@ -430,182 +249,23 @@ local function getVisibleTargets()
     return targets
 end
 
--- ==================== 旧连接清理 ====================
-if getgenv().flashAimConnection then
-    pcall(function() getgenv().flashAimConnection:Disconnect() end)
-    getgenv().flashAimConnection = nil
-end
+-- ==================== 旧连接清理（重复执行不冲突） ====================
 if getgenv().flashRagebotConnection then
     pcall(function() getgenv().flashRagebotConnection:Disconnect() end)
     getgenv().flashRagebotConnection = nil
 end
 
--- ==================== 窗口 ====================
-local win = WindUI:CreateWindow({
-    Title = "闪光 自瞄 + 弹道",
-    Icon = "crosshair",
-    Author = "WindUI 移植版",
-    Folder = "Flash",
-    Size = UDim2.fromOffset(540, 420),
-    MinSize = Vector2.new(460, 320),
-    MaxSize = Vector2.new(800, 560),
-    ToggleKey = Enum.KeyCode.RightShift,
-    Transparent = true,
-    Theme = "Dark",
-    Resizable = true,
-    SideBarWidth = 150,
-    HideSearchBar = false,
-    ScrollBarEnabled = true,
-    NewElements = true,
-    User = { Enabled = false }
-})
+-- ==================== UI（挂在主脚本"闪光" Tab 下） ====================
+local sec = Tab:Section({ Title = "Ragebot 子弹追踪", Icon = "settings", Opened = true })
 
--- ==================== Tab1：自瞄 ====================
-local aimTab = win:Tab({ Title = "自瞄", Icon = "crosshair", Locked = false })
-local secA = aimTab:Section({ Title = "视角自瞄", Icon = "settings", Opened = true })
-
-aimTab:Toggle({
-    Title = "启用自瞄",
-    Desc = "平滑转向目标（改相机视角）+ 显示 FOV 圈",
-    Type = "Checkbox",
-    Value = false,
-    Callback = function(v)
-        AimSettings.Enabled = v
-        if v then
-            InitializeAimDrawings()
-            UpdateFOVCircle()
-            if AimConnection then
-                AimConnection:Disconnect()
-            end
-            AimConnection = RunService.RenderStepped:Connect(function(deltaTime)
-                pcall(function()
-                    if AimSettings.FOVRainbowEnabled then
-                        CurrentFOVHue = CurrentFOVHue + deltaTime * AimSettings.FOVRainbowSpeed / 10
-                    end
-                    UpdateFOVCircle()
-                    AimBot()
-                end)
-            end)
-        else
-            if AimConnection then
-                AimConnection:Disconnect()
-                AimConnection = nil
-            end
-            if FOVCircle then
-                FOVCircle.Visible = false
-            end
-        end
-    end
-})
-
-aimTab:Slider({
-    Title = "FOV 半径 (px)",
-    Desc = "圈的大小，圈内才锁",
-    Step = 5,
-    Value = { Min = 20, Max = 500, Default = 100 },
-    Callback = function(v)
-        AimSettings.FOV = v
-        if FOVCircle then
-            FOVCircle.Radius = v
-        end
-    end
-})
-
-aimTab:Slider({
-    Title = "平滑度",
-    Desc = "越小转向越慢（像真人），越大越快",
-    Step = 1,
-    Value = { Min = 1, Max = 20, Default = 10 },
-    Callback = function(v)
-        AimSettings.Smoothness = v
-    end
-})
-
-aimTab:Slider({
-    Title = "提前量",
-    Desc = "打移动目标预测（0 = 不打提前量）",
-    Step = 1,
-    Value = { Min = 0, Max = 20, Default = 5 },
-    Callback = function(v)
-        AimSettings.CrosshairDistance = v
-    end
-})
-
-aimTab:Dropdown({
-    Title = "瞄准部位",
-    Desc = "选择锁定的身体部位",
-    Values = { "头", "上身", "胸部", "裆部", "左腿", "右腿" },
-    Value = "头",
-    Callback = function(v)
-        AimTargetPart = v
-    end
-})
-
-aimTab:Toggle({
-    Title = "显示 FOV 圈",
-    Desc = "屏幕中央的圈",
-    Type = "Checkbox",
-    Value = true,
-    Callback = function(v)
-        AimSettings.FOVEnabled = v
-        if FOVCircle then
-            FOVCircle.Visible = AimSettings.Enabled and v
-        end
-    end
-})
-
-aimTab:Toggle({
-    Title = "FOV 圈彩虹色",
-    Desc = "圈的颜色渐变",
-    Type = "Checkbox",
-    Value = true,
-    Callback = function(v)
-        AimSettings.FOVRainbowEnabled = v
-    end
-})
-
-aimTab:Toggle({
-    Title = "墙壁检测",
-    Desc = "有墙挡着不锁",
-    Type = "Checkbox",
-    Value = true,
-    Callback = function(v)
-        AimSettings.WallCheck = v
-    end
-})
-
-aimTab:Toggle({
-    Title = "跳过好友",
-    Desc = "好友不锁",
-    Type = "Checkbox",
-    Value = true,
-    Callback = function(v)
-        AimSettings.FriendCheck = v
-    end
-})
-
-aimTab:Toggle({
-    Title = "队伍检测",
-    Desc = "同队不锁",
-    Type = "Checkbox",
-    Value = false,
-    Callback = function(v)
-        AimSettings.TeamCheck = v
-    end
-})
-
--- ==================== Tab2：Ragebot（弹道） ====================
-local killTab = win:Tab({ Title = "Ragebot", Icon = "zap", Locked = false })
-local secK = killTab:Section({ Title = "子弹追踪", Icon = "settings", Opened = true })
-
-killTab:Paragraph({
+Tab:Paragraph({
     Title = "说明",
-    Desc = "自动锁定可见目标，直接上报命中（ProjectileFinished）\n配合自瞄一起用效果最佳"
+    Desc = "自动锁定视野内的可见目标，直接上报命中（ProjectileFinished）\n背后的/屏幕外的/自瞄FOV圈外的目标不会打"
 })
 
-killTab:Toggle({
+Tab:Toggle({
     Title = "启用 Ragebot",
-    Desc = "自动瞄准并射击可见目标",
+    Desc = "开启后自动锁定并射击可见目标",
     Type = "Checkbox",
     Value = false,
     Callback = function(state)
@@ -621,7 +281,7 @@ killTab:Toggle({
                         local targetChar = currentTarget.Character
                         if targetChar then
                             local visiblePart, visiblePos, origin = getVisiblePart(targetChar)
-                            if visiblePart and visiblePos and origin then
+                            if visiblePart and visiblePos and origin and isInView(visiblePos) then
                                 shoot(currentTarget, visiblePart, visiblePos, origin)
                             else
                                 currentTarget = nil
@@ -643,5 +303,24 @@ killTab:Toggle({
     end
 })
 
-print("[闪光] 自瞄 + 弹道 已加载")
-warn("[闪光] 检测到此服务器闪光")
+Tab:Slider({
+    Title = "射击间隔 (秒/发)",
+    Desc = "越小射得越快，越容易被检测（原版固定 0.56）",
+    Step = 0.05,
+    Value = { Min = 0.2, Max = 2, Default = 0.56 },
+    Callback = function(v)
+        fireRateValue = v
+    end
+})
+
+Tab:Toggle({
+    Title = "适配自瞄 FOV 圈",
+    Desc = "配合主脚本自瞄类的 FOV 圈，圈外目标不打（需自瞄类已加载）",
+    Type = "Checkbox",
+    Value = true,
+    Callback = function(v)
+        useAimbotFov = v
+    end
+})
+
+print("[闪光Ragebot] 子弹追踪已挂载")
