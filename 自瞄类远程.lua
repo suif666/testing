@@ -1,5 +1,6 @@
 -- 自瞄类 远程脚本（显示功能 + UI，依赖主脚本提供 AimbotTab）
 -- 主脚本需设置：getgenv().Tabs.AimbotTab（或 getgenv().SutureAimbotTab）
+print("[自瞄类] 远程脚本开始执行")
 
 if getgenv().__SUTURE_AIMBOT_LOADED then
     return
@@ -96,15 +97,23 @@ local function getAimTarget()
         if worldDist > Aimbot.MaxDistance then continue end
 
         if Aimbot.WallCheck then
-            local params = RaycastParams.new()
-            params.FilterType = Enum.RaycastFilterType.Exclude
-            params.FilterDescendantsInstances = { myChar, char }
-            local ray = workspace:Raycast(
-                cam.CFrame.Position,
-                (part.Position - cam.CFrame.Position).Unit * Aimbot.MaxDistance,
-                params
-            )
-            if ray and ray.Instance then continue end
+            -- 精确墙检（提取自闪光）：射线长度 = 到目标的精确距离，透明物/目标自身不算墙
+            local origin = cam.CFrame.Position
+            local dirVec = part.Position - origin
+            local dist = dirVec.Magnitude
+            if dist > 0 then
+                local params = RaycastParams.new()
+                params.FilterType = Enum.RaycastFilterType.Exclude
+                params.FilterDescendantsInstances = { myChar, char }
+                params.IgnoreWater = true
+                local ray = workspace:Raycast(origin, dirVec.Unit * dist, params)
+                if ray and ray.Instance then
+                    local hit = ray.Instance
+                    if not hit:IsDescendantOf(char) and hit.Transparency < 0.9 then
+                        continue
+                    end
+                end
+            end
         end
 
         -- 按优先级打分：血量低 / 距离近 / 准心近
@@ -282,3 +291,9 @@ local uiOk, uiErr = pcall(function()
         end
     })
 end)
+
+if not uiOk then
+    warn("[自瞄类] Tab UI 创建失败:", uiErr)
+else
+    print("[自瞄类] 远程脚本加载完成")
+end
