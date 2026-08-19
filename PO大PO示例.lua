@@ -1,4 +1,5 @@
 -- po大po 功能（远程脚本格式，挂主脚本"po大po" Tab）
+-- 移植自小西源码/po大po.lua：自动售卖 / 卡服 / 自动拉屎
 -- 主脚本需设置：getgenv().Tabs.POTab（或 getgenv().SuturePOTab）
 
 if getgenv().__SUTURE_PO_LOADED then
@@ -13,7 +14,12 @@ if not Tab then
 end
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RemoteEvent = ReplicatedStorage.Packets.Packet.RemoteEvent
+
+-- 安全获取 RemoteEvent：任何游戏都不崩，找不到不提示、UI 照常挂载
+local RemoteEvent = nil
+pcall(function()
+    RemoteEvent = ReplicatedStorage.Packets.Packet.RemoteEvent
+end)
 
 -- ==================== UI ====================
 local sec = Tab:Section({ Title = "po大po 功能", Icon = "settings", Opened = true })
@@ -27,12 +33,13 @@ Tab:Paragraph({
 local run1 = false
 Tab:Toggle({
     Title = "自动售卖",
-    Desc = "自动卖臭臭",
+    Desc = "自动卖臭臭（高速发包）",
     Type = "Checkbox",
     Value = false,
     Callback = function(state)
         run1 = state
         if state then
+            if not RemoteEvent then return end
             task.spawn(function()
                 while run1 do
                     pcall(function()
@@ -49,12 +56,13 @@ Tab:Toggle({
 local run2 = false
 Tab:Toggle({
     Title = "卡服",
-    Desc = "别人也就卡那一下 自己还会被踢 得不偿失",
+    Desc = "拉很多臭臭（会被踢，但很爽）",
     Type = "Checkbox",
     Value = false,
     Callback = function(state)
         run2 = state
         if state then
+            if not RemoteEvent then return end
             task.spawn(function()
                 while run2 do
                     pcall(function()
@@ -71,12 +79,13 @@ Tab:Toggle({
 local run3 = false
 Tab:Toggle({
     Title = "自动拉屎",
-    Desc = "从今天开始我要自己上厕所",
+    Desc = "拉臭臭",
     Type = "Checkbox",
     Value = false,
     Callback = function(state)
         run3 = state
         if state then
+            if not RemoteEvent then return end
             task.spawn(function()
                 while run3 do
                     pcall(function()
