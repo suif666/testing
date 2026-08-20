@@ -2,29 +2,26 @@
     【游戏内 AI 聊天助手】 by suif
     基于 Agnes AI API（OpenAI 兼容），模型 agnes-2.5-flash（支持对话 + 图像理解）
     UI 抄自 BS 脚本的聊天界面（原生 ScreenGui，兼容手机/电脑）
-    API 调用使用 HttpService:RequestAsync（Roblox 官方，BS脚本验证过）
+    API 调用走你的 Cloudflare Worker 中转（game:HttpGet → Worker → Agnes API）
 
     使用方法：
-      1. 把下面 KEY 换成你自己的 key（platform.agnes-ai.com 获取）
+      1. 确保你的 Cloudflare Worker 已部署新版源码.lua（含 /ai 端点，KEY 在 Worker 里）
       2. 注入器里加载本脚本
       3. 面板默认打开，可拖动、可最小化
 
     图片解析：输入  img <图片URL> <问题>   例如：
       img https://picsum.photos/400 这张图里有什么？
 
-    ⚠️ 重要：KEY 是私有凭据，请勿把带 key 的脚本公开分享！
-       可用 getgenv().AgnesAIKey = "sk-xxx" 提前注入，脚本自动读取。
+    ⚠️ 请求全部走你的 Cloudflare Worker 中转（KEY 在 Worker 端，游戏内不暴露）
 ]]
 
 -- ============ 配置 ============
-local KEY       = getgenv().AgnesAIKey or "sk-zgcP2NSe8sUGhyQPoX6ADvUVYnKbXrdUr2g5HHipKWZynVNf" -- ← 换成你自己的
-local MODEL     = getgenv().AgnesAIModel or "agnes-2.5-flash"
-local BASE_URL  = "https://apihub.agnes-ai.com/v1"
-local MAX_TOKENS = 1024
-local TIMEOUT    = 30
+local WORKER_URL = "https://suture-hub-counter.sfbdsl666.workers.dev/ai" -- ← 你的 Worker 中转地址
+local MODEL      = getgenv().AgnesAIModel or "agnes-2.5-flash"
 
 -- ============ 环境 ============
 local HttpService = game:GetService("HttpService")
+HttpService.HttpTimeout = 120 -- AI 回复可能较慢，放宽超时
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
@@ -211,75 +208,32 @@ local function addBubble(sender, text, isMe, typingEffect)
     return container
 end
 
--- ============ API 调用（执行器 request 优先，RequestAsync 兜底）============
--- RequestAsync 是 Roblox 原生 API，只允许访问 Roblox 白名单域名（会 connectfail）
--- 执行器自己的 request 走执行器的 HTTP 栈，能访问任意域名（加载 GitHub 就是走它）
-local httpRequest = syn and syn.request or http and http.request or request
+-- ============ API 调用（Cloudflare Worker 中转，game:HttpGet）============
+-- 你的环境只有 game:HttpGet 能访问第三方域名（request/RequestAsync 都被 Roblox 域名白名单挡）
+-- 所以请求走 Worker：HttpGet → Worker 转发 Agnes API → 返回回复文本
+local function callAI(text, imgUrl)
+    local url = WORKER_URL .. "?msg=" .. HttpService:UrlEncode(text)
+    if imgUrl and imgUrl ~= "" then
+        url = url .. "&img=" .. HttpService:UrlEncode(imgUrl)
+    end
 
-local function parseReply(body)
-    local ok, data = pcall(function()
+    local ok, body = pcall(function()
+        return game:HttpGet(url)
+    end)
+    if not ok then
+        return "（请求失败：" .. tostring(body) .. "）"
+    end
+
+    local okDecode, data = pcall(function()
         return HttpService:JSONDecode(body)
     end)
-    if not ok or not data then return "（响应解析失败）" end
-    if data.error then
-        return "（API 错误: " .. tostring(data.error.message or data.error) .. "）"
-    end
-    if data.choices and data.choices[1] and data.choices[1].message then
-        return data.choices[1].message.content
-    end
-    return "（API返回格式异常）"
-end
-
-local function callAI(messages)
-    local payload = {
-        model = MODEL,
-        messages = messages,
-        max_tokens = MAX_TOKENS,
-    }
-    local body = HttpService:JSONEncode(payload)
-
-    -- 方式1：执行器 request
-    if httpRequest then
-        local success, response = pcall(function()
-            return httpRequest({
-                Url = BASE_URL .. "/chat/completions",
-                Method = "POST",
-                Headers = {
-                    ["Content-Type"] = "application/json",
-                    ["Authorization"] = "Bearer " .. KEY,
-                },
-                Body = body,
-            })
-        end)
-        if success and response and response.Body then
-            return parseReply(response.Body)
-        else
-            warn("[AI助手] 执行器 request 失败: " .. tostring(response))
+    if okDecode and data then
+        if data.ok and data.reply then
+            return data.reply
         end
+        return "（" .. tostring(data.error or "未知错误") .. "）"
     end
-
-    -- 方式2：RequestAsync 兜底（可能因 Roblox 域名限制失败）
-    local success, response = pcall(function()
-        return HttpService:RequestAsync({
-            Url = BASE_URL .. "/chat/completions",
-            Method = "POST",
-            Headers = {
-                ["Content-Type"] = "application/json",
-                ["Authorization"] = "Bearer " .. KEY,
-            },
-            Body = body,
-        })
-    end)
-
-    if success and response.Success then
-        return parseReply(response.Body)
-    else
-        if not success then
-            return "（请求失败：网络错误 " .. tostring(response) .. "）"
-        else
-            return "（请求失败：" .. tostring(response.StatusCode) .. "）"
-        end
-    end
+    return "（响应解析失败：" .. tostring(body):sub(1, 120) .. "）"
 end
 
 -- ============ 发送逻辑（抄自 BS 脚本）============
@@ -302,7 +256,8 @@ local function send(text, isRetry)
     typing.Text = "Agnes正在输入…"
 
     -- 图片模式：img <URL> <问题>
-    local content
+    local aiText = text
+    local imgUrl = nil
     if text:match("^[iI][mM][gG]%s+") then
         local _, _, url, question = text:find("^[iI][mM][gG]%s+(%S+)%s*(.-)$")
         url = url or ""
@@ -313,22 +268,18 @@ local function send(text, isRetry)
             addBubble("系统", "格式：img <图片URL> <问题>", false, false)
             return
         end
-        content = {
-            { type = "text", text = question ~= "" and question or "请用中文描述这张图片" },
-            { type = "image_url", image_url = { url = url } },
-        }
-    else
-        content = text
+        imgUrl = url
+        aiText = question ~= "" and question or "请用中文描述这张图片"
     end
 
-    table.insert(currentMessages, { role = "user", content = content })
+    table.insert(currentMessages, { role = "user", content = text })
     -- 裁剪上下文（保留最近 10 轮）
     while #currentMessages > 20 do
         table.remove(currentMessages, 1)
         table.remove(currentMessages, 1)
     end
 
-    local reply = callAI(currentMessages)
+    local reply = callAI(aiText, imgUrl)
     typing.Text = ""
 
     if busy then
