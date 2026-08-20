@@ -211,14 +211,54 @@ local function addBubble(sender, text, isMe, typingEffect)
     return container
 end
 
--- ============ API 调用（Agnes AI + RequestAsync）============
+-- ============ API 调用（执行器 request 优先，RequestAsync 兜底）============
+-- RequestAsync 是 Roblox 原生 API，只允许访问 Roblox 白名单域名（会 connectfail）
+-- 执行器自己的 request 走执行器的 HTTP 栈，能访问任意域名（加载 GitHub 就是走它）
+local httpRequest = syn and syn.request or http and http.request or request
+
+local function parseReply(body)
+    local ok, data = pcall(function()
+        return HttpService:JSONDecode(body)
+    end)
+    if not ok or not data then return "（响应解析失败）" end
+    if data.error then
+        return "（API 错误: " .. tostring(data.error.message or data.error) .. "）"
+    end
+    if data.choices and data.choices[1] and data.choices[1].message then
+        return data.choices[1].message.content
+    end
+    return "（API返回格式异常）"
+end
+
 local function callAI(messages)
     local payload = {
         model = MODEL,
         messages = messages,
         max_tokens = MAX_TOKENS,
     }
+    local body = HttpService:JSONEncode(payload)
 
+    -- 方式1：执行器 request
+    if httpRequest then
+        local success, response = pcall(function()
+            return httpRequest({
+                Url = BASE_URL .. "/chat/completions",
+                Method = "POST",
+                Headers = {
+                    ["Content-Type"] = "application/json",
+                    ["Authorization"] = "Bearer " .. KEY,
+                },
+                Body = body,
+            })
+        end)
+        if success and response and response.Body then
+            return parseReply(response.Body)
+        else
+            warn("[AI助手] 执行器 request 失败: " .. tostring(response))
+        end
+    end
+
+    -- 方式2：RequestAsync 兜底（可能因 Roblox 域名限制失败）
     local success, response = pcall(function()
         return HttpService:RequestAsync({
             Url = BASE_URL .. "/chat/completions",
@@ -227,20 +267,12 @@ local function callAI(messages)
                 ["Content-Type"] = "application/json",
                 ["Authorization"] = "Bearer " .. KEY,
             },
-            Body = HttpService:JSONEncode(payload),
+            Body = body,
         })
     end)
 
     if success and response.Success then
-        local data = HttpService:JSONDecode(response.Body)
-        if data.error then
-            return "（API 错误: " .. tostring(data.error.message or data.error) .. "）"
-        end
-        if data.choices and data.choices[1] and data.choices[1].message then
-            return data.choices[1].message.content
-        else
-            return "（API返回格式异常）"
-        end
+        return parseReply(response.Body)
     else
         if not success then
             return "（请求失败：网络错误 " .. tostring(response) .. "）"
