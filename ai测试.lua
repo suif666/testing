@@ -21,7 +21,6 @@ local MODEL      = getgenv().AgnesAIModel or "agnes-2.5-flash"
 
 -- ============ 环境 ============
 local HttpService = game:GetService("HttpService")
-HttpService.HttpTimeout = 120 -- AI 回复可能较慢，放宽超时
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
@@ -217,9 +216,15 @@ local function callAI(text, imgUrl)
         url = url .. "&img=" .. HttpService:UrlEncode(imgUrl)
     end
 
-    local ok, body = pcall(function()
-        return game:HttpGet(url)
-    end)
+    -- HttpGet 超时约 10 秒，AI 回复慢可能失败，重试 2 次
+    local ok, body
+    for attempt = 1, 3 do
+        ok, body = pcall(function()
+            return game:HttpGet(url)
+        end)
+        if ok then break end
+        task.wait(1.5)
+    end
     if not ok then
         return "（请求失败：" .. tostring(body) .. "）"
     end
