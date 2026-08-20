@@ -2,6 +2,7 @@
     【游戏内 AI 聊天助手 · WindUI Boreal 版】 by suif
     基于 Agnes AI API（OpenAI 兼容），模型 agnes-2.5-flash（支持对话 + 图像理解）
     UI 使用 WindUI Boreal（和主脚本同款，手机/电脑通用）
+    API 调用使用 HttpService:RequestAsync（Roblox 官方，兼容所有执行器，BS脚本验证过）
 
     使用方法：
       1. 把下面 KEY 换成你自己的 key（platform.agnes-ai.com 获取）
@@ -34,12 +35,6 @@ if not ok or not WindUI then
     return
 end
 
--- ============ 环境检查 ============
-local httpRequest = syn and syn.request or http and http.request or request
-if not httpRequest then
-    warn("[AI助手] 当前执行器不支持 request，无法调用 API")
-    return
-end
 local HttpService = game:GetService("HttpService")
 
 -- 防止重复执行
@@ -101,11 +96,44 @@ chatTab:Button({
     end,
 })
 
+-- 从 WindUI Input 组件内部找出真正的 TextBox（直接读它的文本，避免失焦延迟问题）
+local function getInputText()
+    -- 优先直接读 TextBox
+    local function findTextBox(inst, depth)
+        if depth > 10 then return nil end
+        for _, c in ipairs(inst:GetChildren()) do
+            if c:IsA("TextBox") then return c end
+            local r = findTextBox(c, depth + 1)
+            if r then return r end
+        end
+        return nil
+    end
+    local main = input.InputFrame and input.InputFrame.UIElements
+        and (input.InputFrame.UIElements.Container or input.InputFrame.UIElements.Main)
+    local tb = main and findTextBox(main, 0)
+    if tb and tb.Text ~= "" then
+        return tb, tb
+    end
+    -- 兜底：用组件的 Value
+    return input.Value or "", nil
+end
+
+local function clearInput()
+    pcall(function()
+        input:Set("")
+    end)
+end
+
 -- ============ 发送逻辑 ============
+local busy = false
+
 local function send()
-    local text = (input.Value or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if busy then return end
+    local text, tb = getInputText()
+    text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
     if text == "" then return end
-    input:Set("")
+
+    clearInput()
 
     addMessage("user", text)
 
@@ -134,10 +162,12 @@ local function send()
     end
 
     local thinking = addMessage("ai", "正在思考…")
+    busy = true
 
     task.spawn(function()
         local okReq, reply = pcall(function()
-            local res = httpRequest({
+            -- 用 HttpService:RequestAsync（Roblox 官方 API，BS脚本验证过可用）
+            local response = HttpService:RequestAsync({
                 Url = BASE_URL .. "/chat/completions",
                 Method = "POST",
                 Headers = {
@@ -150,8 +180,10 @@ local function send()
                     max_tokens = MAX_TOKENS,
                 }),
             })
-            if not res or not res.Body then error("网络请求失败") end
-            local data = HttpService:JSONDecode(res.Body)
+            if not response or not response.Success then
+                error("网络请求失败" .. (response and response.StatusCode or ""))
+            end
+            local data = HttpService:JSONDecode(response.Body)
             if data.error then error(data.error.message or "API 错误") end
             local msg = data.choices and data.choices[1]
             if not msg or not msg.message or not msg.message.content then error("响应格式异常") end
@@ -167,6 +199,7 @@ local function send()
             if thinking.SetDesc then thinking:SetDesc("⚠️ " .. err) end
             table.insert(history, { role = "assistant", content = "（错误）" })
         end
+        busy = false
         scrollToBottom()
     end)
 end
