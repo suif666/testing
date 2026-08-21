@@ -1,11 +1,12 @@
--- Roblox WindUI 风格 AI 聊天界面组件 (动画精简版)
+-- Roblox WindUI 风格 AI 聊天界面组件 (修复卡死版)
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
+local TextService = game:GetService("TextService")
 local LocalPlayer = Players.LocalPlayer
 
 -- ==========================================
--- 1. 动画通用配置与辅助函数
+-- 1. Tween 动画辅助函数
 -- ==========================================
 local function CreateTween(instance, tweenInfoProps, goalProps)
     local tween = TweenService:Create(instance, tweenInfoProps, goalProps)
@@ -28,20 +29,21 @@ local Theme = {
     Outline = Color3.fromRGB(45, 45, 55)
 }
 
--- 2. UI 根节点
+-- 2. ScreenGui 根节点
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "WindUI_AIChat"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
--- 主窗口 (缩小尺寸: 620 x 400)
+-- 尺寸配置 (精简尺寸: 620 x 400)
 local NormalSize = UDim2.fromOffset(620, 400)
 local NormalPos = UDim2.new(0.5, -310, 0.5, -200)
 
+-- 主窗口
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = "MainFrame"
-MainFrame.Size = NormalSize
-MainFrame.Position = NormalPos
+MainFrame.Size = UDim2.fromOffset(0, 0)
+MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
 MainFrame.BackgroundColor3 = Theme.Background
 MainFrame.BorderSizePixel = 0
 MainFrame.ClipsDescendants = true
@@ -54,15 +56,14 @@ local MainStroke = Instance.new("UIStroke", MainFrame)
 MainStroke.Color = Theme.Outline
 MainStroke.Thickness = 1
 
--- 入场打开动画
-MainFrame.ScaleScale = 0.8
-MainFrame.Size = UDim2.fromOffset(0, 0)
+-- 打开动画 (从中心平滑弹窗放大)
 CreateTween(MainFrame, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-    Size = NormalSize
+    Size = NormalSize,
+    Position = NormalPos
 })
 
 -- ==========================================
--- 3. 右上角控制按键与动画 (修复乱码问题)
+-- 3. 右上角控制按键与动画
 -- ==========================================
 local ControlBar = Instance.new("Frame")
 ControlBar.Size = UDim2.new(1, 0, 0, 36)
@@ -79,18 +80,12 @@ ControlLayout.Parent = ControlBar
 local ControlPadding = Instance.new("UIPadding", ControlBar)
 ControlPadding.PaddingRight = UDim.new(0, 10)
 
-local function AddButtonAnimation(btn, defaultBg, hoverBg)
+local function AddButtonHover(btn, defaultBg, hoverBg)
     btn.MouseEnter:Connect(function()
-        CreateTween(btn, TweenInfo.new(0.2), {BackgroundColor3 = hoverBg, Size = UDim2.fromOffset(26, 26)})
+        CreateTween(btn, TweenInfo.new(0.15), {BackgroundColor3 = hoverBg})
     end)
     btn.MouseLeave:Connect(function()
-        CreateTween(btn, TweenInfo.new(0.2), {BackgroundColor3 = defaultBg, Size = UDim2.fromOffset(24, 24)})
-    end)
-    btn.MouseButton1Down:Connect(function()
-        CreateTween(btn, TweenInfo.new(0.1), {Size = UDim2.fromOffset(22, 22)})
-    end)
-    btn.MouseButton1Up:Connect(function()
-        CreateTween(btn, TweenInfo.new(0.1), {Size = UDim2.fromOffset(26, 26)})
+        CreateTween(btn, TweenInfo.new(0.15), {BackgroundColor3 = defaultBg})
     end)
 end
 
@@ -109,16 +104,16 @@ local function CreateControlButton(iconText, isClose)
     corner.CornerRadius = UDim.new(0, 6)
 
     local hoverColor = isClose and Color3.fromRGB(220, 60, 60) or Theme.CardHover
-    AddButtonAnimation(btn, btn.BackgroundColor3, hoverColor)
+    AddButtonHover(btn, btn.BackgroundColor3, hoverColor)
     return btn
 end
 
--- 使用 100% 兼容的通用字符，绝不显示为“口”
-local MinBtn = CreateControlButton("-", false)  -- 最小化
-local MaxBtn = CreateControlButton("[]", false) -- 全屏
-local CloseBtn = CreateControlButton("X", true)  -- 关闭
+-- 高兼容字符，避免出现“口”
+local MinBtn = CreateControlButton("-", false)
+local MaxBtn = CreateControlButton("[]", false)
+local CloseBtn = CreateControlButton("X", true)
 
--- 全屏切换逻辑与动画
+-- 全屏切换
 local isMaximized = false
 MaxBtn.MouseButton1Click:Connect(function()
     isMaximized = not isMaximized
@@ -135,22 +130,24 @@ end)
 CloseBtn.MouseButton1Click:Connect(function()
     local t = CreateTween(MainFrame, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.In), {
         Size = UDim2.fromOffset(0, 0),
-        Position = UDim2.new(MainFrame.Position.X.Scale, MainFrame.Position.X.Offset + MainFrame.AbsoluteSize.X/2, MainFrame.Position.Y.Scale, MainFrame.Position.Y.Offset + MainFrame.AbsoluteSize.Y/2)
+        Position = UDim2.new(0.5, 0, 0.5, 0)
     })
     t.Completed:Connect(function()
         ScreenGui:Destroy()
     end)
 end)
 
--- 4. 悬浮球 (最小化模式及动画)
+-- ==========================================
+-- 4. 悬浮球 (最小化模式)
+-- ==========================================
 local FloatingBall = Instance.new("TextButton")
 FloatingBall.Name = "FloatingBall"
-FloatingBall.Size = UDim2.fromOffset(0, 0)
+FloatingBall.Size = UDim2.fromOffset(44, 44)
 FloatingBall.Position = UDim2.new(0.9, -50, 0.85, -50)
 FloatingBall.BackgroundColor3 = Theme.Accent
 FloatingBall.Text = "AI"
 FloatingBall.TextColor3 = Theme.Text
-FloatingBall.TextSize = 16
+FloatingBall.TextSize = 15
 FloatingBall.Font = Enum.Font.GothamBold
 FloatingBall.Visible = false
 FloatingBall.AutoButtonColor = false
@@ -159,16 +156,10 @@ FloatingBall.Parent = ScreenGui
 local BallCorner = Instance.new("UICorner", FloatingBall)
 BallCorner.CornerRadius = UDim.new(1, 0)
 
--- 悬浮球 Hover 动效
-FloatingBall.MouseEnter:Connect(function()
-    CreateTween(FloatingBall, TweenInfo.new(0.2), {BackgroundColor3 = Theme.AccentHover, Size = UDim2.fromOffset(50, 50)})
-end)
-FloatingBall.MouseLeave:Connect(function()
-    CreateTween(FloatingBall, TweenInfo.new(0.2), {BackgroundColor3 = Theme.Accent, Size = UDim2.fromOffset(44, 44)})
-end)
+AddButtonHover(FloatingBall, Theme.Accent, Theme.AccentHover)
 
--- 拖拽逻辑
-local dragging, dragInput, dragStart, startPos
+-- 悬浮球拖拽逻辑
+local dragging, dragStart, startPos
 FloatingBall.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         dragging = true
@@ -177,14 +168,8 @@ FloatingBall.InputBegan:Connect(function(input)
     end
 end)
 
-FloatingBall.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-        dragInput = input
-    end
-end)
-
 UserInputService.InputChanged:Connect(function(input)
-    if input == dragInput and dragging then
+    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
         local delta = input.Position - dragStart
         FloatingBall.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
     end
@@ -212,7 +197,7 @@ MinBtn.MouseButton1Click:Connect(function()
     end)
 end)
 
--- 恢复主界面动画
+-- 悬浮球还原动画
 FloatingBall.MouseButton1Click:Connect(function()
     CreateTween(FloatingBall, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
         Size = UDim2.fromOffset(0, 0)
@@ -228,17 +213,17 @@ FloatingBall.MouseButton1Click:Connect(function()
 end)
 
 -- ==========================================
--- 5. 侧边栏 (对话列表与新建)
+-- 5. 侧边栏
 -- ==========================================
 local Sidebar = Instance.new("Frame")
-Sidebar.Size = UDim2.new(0, 170, 1, 0)
+Sidebar.Size = UDim2.new(0, 160, 1, 0)
 Sidebar.BackgroundColor3 = Theme.Sidebar
 Sidebar.BorderSizePixel = 0
 Sidebar.Parent = MainFrame
 
 local NewChatBtn = Instance.new("TextButton")
-NewChatBtn.Size = UDim2.new(1, -20, 0, 32)
-NewChatBtn.Position = UDim2.new(0, 10, 0, 10)
+NewChatBtn.Size = UDim2.new(1, -16, 0, 32)
+NewChatBtn.Position = UDim2.new(0, 8, 0, 8)
 NewChatBtn.BackgroundColor3 = Theme.Accent
 NewChatBtn.Text = "+ 新对话"
 NewChatBtn.TextColor3 = Theme.Text
@@ -250,11 +235,11 @@ NewChatBtn.Parent = Sidebar
 local NewChatCorner = Instance.new("UICorner", NewChatBtn)
 NewChatCorner.CornerRadius = UDim.new(0, 6)
 
-AddButtonAnimation(NewChatBtn, Theme.Accent, Theme.AccentHover)
+AddButtonHover(NewChatBtn, Theme.Accent, Theme.AccentHover)
 
 local ArchiveLabel = Instance.new("TextLabel")
-ArchiveLabel.Size = UDim2.new(1, -20, 0, 18)
-ArchiveLabel.Position = UDim2.new(0, 10, 0, 48)
+ArchiveLabel.Size = UDim2.new(1, -16, 0, 18)
+ArchiveLabel.Position = UDim2.new(0, 8, 0, 44)
 ArchiveLabel.BackgroundTransparency = 1
 ArchiveLabel.Text = "历史归档"
 ArchiveLabel.TextColor3 = Theme.TextSub
@@ -264,8 +249,8 @@ ArchiveLabel.TextXAlignment = Enum.TextXAlignment.Left
 ArchiveLabel.Parent = Sidebar
 
 local HistoryScroll = Instance.new("ScrollingFrame")
-HistoryScroll.Size = UDim2.new(1, -10, 1, -72)
-HistoryScroll.Position = UDim2.new(0, 5, 0, 68)
+HistoryScroll.Size = UDim2.new(1, -10, 1, -68)
+HistoryScroll.Position = UDim2.new(0, 5, 0, 64)
 HistoryScroll.BackgroundTransparency = 1
 HistoryScroll.ScrollBarThickness = 2
 HistoryScroll.Parent = Sidebar
@@ -275,17 +260,21 @@ HistoryLayout.SortOrder = Enum.SortOrder.LayoutOrder
 HistoryLayout.Padding = UDim.new(0, 4)
 HistoryLayout.Parent = HistoryScroll
 
+HistoryLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+    HistoryScroll.CanvasSize = UDim2.new(0, 0, 0, HistoryLayout.AbsoluteContentSize.Y + 10)
+end)
+
 -- ==========================================
--- 6. 右侧聊天区域与输入框
+-- 6. 右侧聊天与输入区域
 -- ==========================================
 local ChatArea = Instance.new("Frame")
-ChatArea.Size = UDim2.new(1, -170, 1, -36)
-ChatArea.Position = UDim2.new(0, 170, 0, 36)
+ChatArea.Size = UDim2.new(1, -160, 1, -36)
+ChatArea.Position = UDim2.new(0, 160, 0, 36)
 ChatArea.BackgroundTransparency = 1
 ChatArea.Parent = MainFrame
 
 local MessageScroll = Instance.new("ScrollingFrame")
-MessageScroll.Size = UDim2.new(1, -16, 1, -56)
+MessageScroll.Size = UDim2.new(1, -16, 1, -54)
 MessageScroll.Position = UDim2.new(0, 8, 0, 0)
 MessageScroll.BackgroundTransparency = 1
 MessageScroll.ScrollBarThickness = 3
@@ -299,13 +288,13 @@ MessageLayout.Parent = MessageScroll
 
 MessageLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
     MessageScroll.CanvasSize = UDim2.new(0, 0, 0, MessageLayout.AbsoluteContentSize.Y + 12)
-    MessageScroll.CanvasPosition = Vector2.new(0, MessageScroll.CanvasSize.Y.Offset)
+    MessageScroll.CanvasPosition = Vector2.new(0, 99999)
 end)
 
 -- 输入框
 local InputContainer = Instance.new("Frame")
-InputContainer.Size = UDim2.new(1, -16, 0, 38)
-InputContainer.Position = UDim2.new(0, 8, 1, -46)
+InputContainer.Size = UDim2.new(1, -16, 0, 36)
+InputContainer.Position = UDim2.new(0, 8, 1, -44)
 InputContainer.BackgroundColor3 = Theme.Card
 InputContainer.Parent = ChatArea
 
@@ -313,8 +302,8 @@ local InputCorner = Instance.new("UICorner", InputContainer)
 InputCorner.CornerRadius = UDim.new(0, 6)
 
 local InputBox = Instance.new("TextBox")
-InputBox.Size = UDim2.new(1, -48, 1, 0)
-InputBox.Position = UDim2.new(0, 10, 0, 0)
+InputBox.Size = UDim2.new(1, -44, 1, 0)
+InputBox.Position = UDim2.new(0, 8, 0, 0)
 InputBox.BackgroundTransparency = 1
 InputBox.PlaceholderText = "发送消息给 AI..."
 InputBox.PlaceholderColor3 = Theme.TextSub
@@ -327,10 +316,10 @@ InputBox.ClearTextOnFocus = false
 InputBox.Parent = InputContainer
 
 local SendBtn = Instance.new("TextButton")
-SendBtn.Size = UDim2.fromOffset(28, 26)
-SendBtn.Position = UDim2.new(1, -34, 0.5, -13)
+SendBtn.Size = UDim2.fromOffset(26, 24)
+SendBtn.Position = UDim2.new(1, -30, 0.5, -12)
 SendBtn.BackgroundColor3 = Theme.Accent
-SendBtn.Text = ">" -- 标准高兼容字符
+SendBtn.Text = ">"
 SendBtn.TextColor3 = Theme.Text
 SendBtn.Font = Enum.Font.GothamBold
 SendBtn.TextSize = 13
@@ -340,16 +329,15 @@ SendBtn.Parent = InputContainer
 local SendCorner = Instance.new("UICorner", SendBtn)
 SendCorner.CornerRadius = UDim.new(0, 4)
 
-AddButtonAnimation(SendBtn, Theme.Accent, Theme.AccentHover)
+AddButtonHover(SendBtn, Theme.Accent, Theme.AccentHover)
 
 -- ==========================================
--- 7. 核心隔离逻辑 & 消息气泡动画
+-- 7. 核心隔离逻辑 & 消息气泡动效
 -- ==========================================
 local Sessions = {}
 local CurrentSessionId = nil
 local SessionCounter = 0
 
--- 带有弹出动效的气泡创建函数
 local function AddMessageBubble(sender, text, animate)
     local isUser = (sender == "User")
     
@@ -377,12 +365,11 @@ local function AddMessageBubble(sender, text, animate)
     Label.TextXAlignment = Enum.TextXAlignment.Left
     Label.Parent = Bubble
 
-    -- 计算文本占用高度与宽度
-    local TextBound = game:GetService("TextService"):GetTextSize(
-        text, 12, Enum.Font.Gotham, Vector2.new(260, 2000)
+    local TextBound = TextService:GetTextSize(
+        text, 12, Enum.Font.Gotham, Vector2.new(250, 2000)
     )
     
-    local bubbleWidth = math.clamp(TextBound.X + 20, 50, 280)
+    local bubbleWidth = math.clamp(TextBound.X + 20, 50, 270)
     local bubbleHeight = TextBound.Y + 14
     
     RowFrame.Size = UDim2.new(1, 0, 0, bubbleHeight)
@@ -390,13 +377,11 @@ local function AddMessageBubble(sender, text, animate)
     local finalPosX = isUser and UDim2.new(1, -bubbleWidth, 0, 0) or UDim2.new(0, 0, 0, 0)
     
     if animate then
-        -- 初始状态（下偏+透明）
         Bubble.Size = UDim2.fromOffset(bubbleWidth, 0)
         Bubble.Position = finalPosX + UDim2.fromOffset(0, 10)
         Bubble.BackgroundTransparency = 1
         Label.TextTransparency = 1
 
-        -- 淡入+上浮弹出动画
         CreateTween(Bubble, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
             Size = UDim2.fromOffset(bubbleWidth, bubbleHeight),
             Position = finalPosX,
@@ -409,7 +394,6 @@ local function AddMessageBubble(sender, text, animate)
     end
 end
 
--- 加载选中的对话
 local function LoadSession(sessionId)
     CurrentSessionId = sessionId
     
@@ -425,7 +409,6 @@ local function LoadSession(sessionId)
     end
 end
 
--- 创建新对话
 local function CreateNewSession()
     SessionCounter = SessionCounter + 1
     local id = "Session_" .. SessionCounter
@@ -449,7 +432,6 @@ local function CreateNewSession()
     local ItemCorner = Instance.new("UICorner", ItemBtn)
     ItemCorner.CornerRadius = UDim.new(0, 5)
 
-    -- 点击侧边栏按钮交互动效
     ItemBtn.MouseEnter:Connect(function()
         if CurrentSessionId ~= id then
             CreateTween(ItemBtn, TweenInfo.new(0.15), {BackgroundColor3 = Theme.CardHover})
@@ -462,37 +444,31 @@ local function CreateNewSession()
     end)
 
     ItemBtn.MouseButton1Click:Connect(function()
-        -- 恢复其他按钮颜色
         for _, btn in ipairs(HistoryScroll:GetChildren()) do
             if btn:IsA("TextButton") then
                 CreateTween(btn, TweenInfo.new(0.2), {BackgroundColor3 = Theme.Card, TextColor3 = Theme.TextSub})
             end
         end
-        -- 高亮选中按钮
         CreateTween(ItemBtn, TweenInfo.new(0.2), {BackgroundColor3 = Theme.Accent, TextColor3 = Theme.Text})
         LoadSession(id)
     end)
 
-    -- 自动切到新建立的对话
     ItemBtn.BackgroundColor3 = Theme.Accent
     ItemBtn.TextColor3 = Theme.Text
     LoadSession(id)
 end
 
--- 发送消息
 local function SendMessage()
     local text = InputBox.Text
     if text:gsub("%s+", "") == "" or not CurrentSessionId then return end
 
     InputBox.Text = ""
 
-    -- 保存并带动画追加用户消息
     table.insert(Sessions[CurrentSessionId].Messages, {Sender = "User", Content = text})
     AddMessageBubble("User", text, true)
 
-    -- 模拟 AI 异步延迟回复
     task.delay(0.5, function()
-        local aiReply = "【AI回复】已接收: " .. text .. "\n(上下文隔离正常运作)"
+        local aiReply = "【AI回复】收到: " .. text .. "\n(上下文隔离正常运作)"
         table.insert(Sessions[CurrentSessionId].Messages, {Sender = "AI", Content = aiReply})
         AddMessageBubble("AI", aiReply, true)
     end)
@@ -505,5 +481,5 @@ end)
 
 NewChatBtn.MouseButton1Click:Connect(CreateNewSession)
 
--- 默认进入第一个新对话
+-- 初始化默认对话
 CreateNewSession()
