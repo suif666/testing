@@ -4,6 +4,38 @@ local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local TextService = game:GetService("TextService")
 local LocalPlayer = Players.LocalPlayer
+local HttpService = game:GetService("HttpService")
+
+-- ==========================================
+-- AI 配置与调用（走 Cloudflare Worker 中转，game:HttpGet）
+-- ==========================================
+local AI_WORKER_URL = "https://suture-hub-counter.sfbdsl666.workers.dev/ai"
+local AI_MODEL = "agnes-2.5-flash"
+
+local function callAI(text, imgUrl)
+    local url = AI_WORKER_URL .. "?msg=" .. HttpService:UrlEncode(text)
+    if imgUrl and imgUrl ~= "" then
+        url = url .. "&img=" .. HttpService:UrlEncode(imgUrl)
+    end
+
+    local ok, body = pcall(function()
+        return game:HttpGet(url)
+    end)
+    if not ok then
+        return "（请求失败：" .. tostring(body) .. "）"
+    end
+
+    local okDecode, data = pcall(function()
+        return HttpService:JSONDecode(body)
+    end)
+    if okDecode and data then
+        if data.ok and data.reply then
+            return data.reply
+        end
+        return "（" .. tostring(data.error or "未知错误") .. "）"
+    end
+    return "（响应解析失败）"
+end
 
 -- ==========================================
 -- 1. Tween 动画辅助函数
@@ -559,6 +591,8 @@ local function AddMessageBubble(sender, text, animate)
         Bubble.Size = UDim2.fromOffset(bubbleWidth, bubbleHeight)
         Bubble.Position = finalPosX
     end
+
+    return RowFrame
 end
 
 local function LoadSession(sessionId)
@@ -628,10 +662,29 @@ local function SendMessage()
     table.insert(Sessions[CurrentSessionId].Messages, {Sender = "User", Content = text})
     AddMessageBubble("User", text, true)
 
-    task.delay(0.5, function()
-        local aiReply = "【AI回复】收到: " .. text .. "\n(你可以长按本条文本体验全选与复制)"
-        table.insert(Sessions[CurrentSessionId].Messages, {Sender = "AI", Content = aiReply})
-        AddMessageBubble("AI", aiReply, true)
+    -- 图片模式：img <图片URL> <问题>
+    local aiText = text
+    local imgUrl = nil
+    if text:match("^[iI][mM][gG]%s+") then
+        local _, _, url, question = text:find("^[iI][mM][gG]%s+(%S+)%s*(.-)$")
+        url = url or ""
+        question = question or ""
+        if url ~= "" then
+            imgUrl = url
+            aiText = (question ~= "" and question) or "请用中文描述这张图片"
+        end
+    end
+
+    -- 占位气泡，真实回复到了再替换
+    local thinkingRow = AddMessageBubble("AI", "正在思考…", true)
+
+    task.spawn(function()
+        local reply = callAI(aiText, imgUrl)
+        if thinkingRow and thinkingRow.Parent then
+            thinkingRow:Destroy()
+        end
+        table.insert(Sessions[CurrentSessionId].Messages, {Sender = "AI", Content = reply})
+        AddMessageBubble("AI", reply, true)
     end)
 end
 
