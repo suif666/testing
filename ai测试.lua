@@ -1,4 +1,4 @@
--- Roblox WindUI 风格 AI 聊天界面组件 (带自动关闭遮罩的复制/选择功能)
+-- Roblox WindUI 风格 AI 聊天界面组件 (点按空白处隐藏菜单)
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
@@ -330,18 +330,8 @@ SendCorner.CornerRadius = UDim.new(0, 4)
 AddButtonHover(SendBtn, Theme.Accent, Theme.AccentHover)
 
 -- ==========================================
--- 7. 长按 / 右键 ContextMenu 浮窗及全屏关闭遮罩
+-- 7. 长按 / 右键 ContextMenu 浮窗 (点击空白自动消失)
 -- ==========================================
--- 全屏透明遮罩：点击屏幕任何空白处直接关闭右键菜单并释放文本焦点
-local MenuOverlay = Instance.new("TextButton")
-MenuOverlay.Name = "MenuOverlay"
-MenuOverlay.Size = UDim2.fromScale(1, 1)
-MenuOverlay.BackgroundTransparency = 1
-MenuOverlay.Text = ""
-MenuOverlay.Visible = false
-MenuOverlay.ZIndex = 8
-MenuOverlay.Parent = ScreenGui
-
 local ContextMenu = Instance.new("Frame")
 ContextMenu.Name = "ContextMenu"
 ContextMenu.Size = UDim2.fromOffset(110, 68)
@@ -397,15 +387,19 @@ local ActiveTargetText = ""
 
 local function HideContextMenu()
     ContextMenu.Visible = false
-    MenuOverlay.Visible = false
-    if ActiveTargetBox then
-        ActiveTargetBox:ReleaseFocus()
-        ActiveTargetBox = nil
-    end
 end
 
--- 遮罩点击事件：点击任意地方关闭
-MenuOverlay.MouseButton1Click:Connect(HideContextMenu)
+-- 全局点击检测：点击菜单范围外的空白区域立即隐藏菜单
+UserInputService.InputBegan:Connect(function(input)
+    if ContextMenu.Visible and (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
+        local pos = input.Position
+        local guiPos = ContextMenu.AbsolutePosition
+        local guiSize = ContextMenu.AbsoluteSize
+        if pos.X < guiPos.X or pos.X > guiPos.X + guiSize.X or pos.Y < guiPos.Y or pos.Y > guiPos.Y + guiSize.Y then
+            HideContextMenu()
+        end
+    end
+end)
 
 -- 全选高亮该条消息
 CopyAllBtn.MouseButton1Click:Connect(function()
@@ -414,8 +408,7 @@ CopyAllBtn.MouseButton1Click:Connect(function()
         ActiveTargetBox.SelectionStart = 1
         ActiveTargetBox.CursorPosition = #ActiveTargetBox.Text + 1
     end
-    ContextMenu.Visible = false
-    MenuOverlay.Visible = false
+    HideContextMenu()
 end)
 
 -- 填入下方输入框
@@ -432,7 +425,6 @@ local function ShowContextMenuAt(pos, targetBox, text)
     ActiveTargetText = text
     ContextMenu.Position = UDim2.fromOffset(pos.X, pos.Y - 36)
     ContextMenu.Visible = true
-    MenuOverlay.Visible = true
     ContextMenu.Size = UDim2.fromOffset(110, 0)
     CreateTween(ContextMenu, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
         Size = UDim2.fromOffset(110, 68)
@@ -477,7 +469,7 @@ local function AddMessageBubble(sender, text, animate)
     MsgBox.Active = true
     MsgBox.Parent = Bubble
 
-    -- 触摸/鼠标交互逻辑
+    -- 长按/右键触发弹窗
     local holdThread = nil
     MsgBox.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton2 then
