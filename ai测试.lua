@@ -1,311 +1,245 @@
---[[
-    【游戏内 AI 聊天助手】 by suif
-    基于 Agnes AI API（OpenAI 兼容），模型 agnes-2.5-flash（支持对话 + 图像理解）
-    UI 抄自 BS 脚本的聊天界面（原生 ScreenGui，兼容手机/电脑）
-    API 调用走你的 Cloudflare Worker 中转（game:HttpGet → Worker → Agnes API）
-
-    使用方法：
-      1. 确保你的 Cloudflare Worker 已部署新版源码.lua（含 /ai 端点，KEY 在 Worker 里）
-      2. 注入器里加载本脚本
-      3. 面板默认打开，可拖动、可最小化
-
-    图片解析：输入  img <图片URL> <问题>   例如：
-      img https://picsum.photos/400 这张图里有什么？
-
-    ⚠️ 请求全部走你的 Cloudflare Worker 中转（KEY 在 Worker 端，游戏内不暴露）
-]]
-
--- ============ 配置 ============
-local WORKER_URL = "https://suture-hub-counter.sfbdsl666.workers.dev/ai" -- ← 你的 Worker 中转地址
-local MODEL      = getgenv().AgnesAIModel or "agnes-2.5-flash"
-
--- ============ 环境 ============
-local HttpService = game:GetService("HttpService")
+-- 聊天系统 GUI - 简单好看版
 local Players = game:GetService("Players")
-local UserInputService = game:GetService("UserInputService")
-local LocalPlayer = Players.LocalPlayer
-local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
 
--- 防止重复执行
-if getgenv().AgnesAIChatActive then return end
-getgenv().AgnesAIChatActive = true
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
 
--- ============ UI 构建（抄自 BS 脚本）============
+-- ==================== 创建 GUI ====================
 local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "AgnesAIChatUI"
+screenGui.Name = "SimpleChatSystem"
 screenGui.ResetOnSpawn = false
-screenGui.Parent = PlayerGui
+screenGui.Parent = playerGui
 
-local frameWidth, frameHeight = 420, 500
-local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, frameWidth, 0, frameHeight)
-frame.Position = UDim2.new(0.5, -frameWidth/2, 0.5, -frameHeight/2)
-frame.BackgroundColor3 = Color3.fromRGB(240, 245, 255)
-frame.BorderSizePixel = 0
-frame.Active = true
-frame.Draggable = true
-frame.Parent = screenGui
-Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 11)
+-- 主框架
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 400, 0, 500)
+mainFrame.Position = UDim2.new(1, -420, 0, 20)
+mainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+mainFrame.BorderSizePixel = 0
+mainFrame.Parent = screenGui
 
--- 标题栏
-local titleBar = Instance.new("Frame", frame)
-titleBar.Size = UDim2.new(1, 0, 0, 31)
-titleBar.BackgroundColor3 = Color3.fromRGB(200, 220, 230)
-Instance.new("UICorner", titleBar).CornerRadius = UDim.new(0, 11)
+-- 圆角
+local mainCorner = Instance.new("UICorner")
+mainCorner.CornerRadius = UDim.new(0, 12)
+mainCorner.Parent = mainFrame
 
-local title = Instance.new("TextLabel", titleBar)
-title.Text = "AI 聊天助手 · Agnes"
-title.Font = Enum.Font.GothamBold
-title.TextSize = 16
-title.TextColor3 = Color3.fromRGB(50, 70, 120)
+-- 边框光
+local mainStroke = Instance.new("UIStroke")
+mainStroke.Color = Color3.fromRGB(80, 80, 100)
+mainStroke.Thickness = 1.5
+mainStroke.Parent = mainFrame
+
+-- 顶部栏
+local topBar = Instance.new("Frame")
+topBar.Size = UDim2.new(1, 0, 0, 50)
+topBar.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+topBar.Parent = mainFrame
+
+local topCorner = Instance.new("UICorner")
+topCorner.CornerRadius = UDim.new(0, 12)
+topCorner.Parent = topBar
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -100, 1, 0)
+title.Position = UDim2.new(0, 15, 0, 0)
 title.BackgroundTransparency = 1
-title.Size = UDim2.new(1, -60, 1, 0)
-title.Position = UDim2.new(0, 10, 0, 0)
+title.Text = "🌟 聊天系统 🌟"
+title.TextColor3 = Color3.fromRGB(200, 200, 255)
+title.TextScaled = true
+title.Font = Enum.Font.GothamBold
+title.Parent = topBar
 
-local minimizeBtn = Instance.new("TextButton", titleBar)
-minimizeBtn.Size = UDim2.new(0, 20, 0, 20)
-minimizeBtn.Position = UDim2.new(1, -26, 0.5, -10)
-minimizeBtn.Text = "_"
-minimizeBtn.TextColor3 = Color3.fromRGB(50, 70, 120)
-minimizeBtn.BackgroundColor3 = Color3.fromRGB(220, 235, 245)
-minimizeBtn.TextSize = 16
-minimizeBtn.Font = Enum.Font.GothamBold
-Instance.new("UICorner", minimizeBtn).CornerRadius = UDim.new(0, 4)
+-- 关闭按钮
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 40, 0, 40)
+closeBtn.Position = UDim2.new(1, -45, 0, 5)
+closeBtn.BackgroundTransparency = 1
+closeBtn.Text = "✕"
+closeBtn.TextColor3 = Color3.fromRGB(255, 80, 80)
+closeBtn.TextScaled = true
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.Parent = topBar
 
-local isMinimized = false
-minimizeBtn.MouseButton1Click:Connect(function()
-    isMinimized = not isMinimized
-    if isMinimized then
-        frame.Size = UDim2.new(0, 200, 0, 34)
-        minimizeBtn.Text = "+"
-    else
-        frame.Size = UDim2.new(0, frameWidth, 0, frameHeight)
-        minimizeBtn.Text = "_"
-    end
-end)
+local closeCorner = Instance.new("UICorner")
+closeCorner.CornerRadius = UDim.new(1, 0)
+closeCorner.Parent = closeBtn
 
--- 聊天区
-local chatBox = Instance.new("ScrollingFrame", frame)
-chatBox.Size = UDim2.new(1, -21, 1, -101)
-chatBox.Position = UDim2.new(0, 10, 0, 42)
-chatBox.BackgroundTransparency = 1
-chatBox.BorderSizePixel = 0
-chatBox.ScrollBarThickness = 6
-chatBox.AutomaticCanvasSize = Enum.AutomaticSize.Y
-chatBox.CanvasSize = UDim2.new(0, 0, 0, 0)
-local list = Instance.new("UIListLayout", chatBox)
-list.Padding = UDim.new(0, 7)
-list.SortOrder = Enum.SortOrder.LayoutOrder
+-- 聊天区域（左右两个）
+local chatArea = Instance.new("Frame")
+chatArea.Size = UDim2.new(1, 0, 1, -120)
+chatArea.Position = UDim2.new(0, 0, 0, 50)
+chatArea.BackgroundTransparency = 1
+chatArea.Parent = mainFrame
 
--- 输入区
-local inputFrame = Instance.new("ScrollingFrame", frame)
-inputFrame.Size = UDim2.new(1, -104, 0, 84)
-inputFrame.Position = UDim2.new(0, 10, 1, -94)
-inputFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-inputFrame.BorderSizePixel = 0
-inputFrame.ScrollBarThickness = 4
-inputFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
-inputFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
-Instance.new("UICorner", inputFrame).CornerRadius = UDim.new(0, 8)
+-- 左边聊天栏
+local leftChat = Instance.new("Frame")
+leftChat.Size = UDim2.new(0.48, 0, 1, 0)
+leftChat.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+leftChat.Parent = chatArea
+local leftCorner = Instance.new("UICorner")
+leftCorner.CornerRadius = UDim.new(0, 10)
+leftCorner.Parent = leftChat
 
-local input = Instance.new("TextBox", inputFrame)
-input.Size = UDim2.new(1, -10, 1, 0)
-input.Position = UDim2.new(0, 5, 0, 0)
-input.PlaceholderText = "输入消息（Enter 发送，Ctrl+Enter 换行）\nimg <图片URL> 可解析图片"
+local leftTitle = Instance.new("TextLabel")
+leftTitle.Size = UDim2.new(1, 0, 0, 30)
+leftTitle.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+leftTitle.Text = "💬 群聊"
+leftTitle.TextColor3 = Color3.fromRGB(180, 180, 255)
+leftTitle.TextScaled = true
+leftTitle.Font = Enum.Font.GothamSemibold
+leftTitle.Parent = leftChat
+
+local leftList = Instance.new("ScrollingFrame")
+leftList.Size = UDim2.new(1, -10, 1, -50)
+leftList.Position = UDim2.new(0, 5, 0, 35)
+leftList.BackgroundTransparency = 1
+leftList.ScrollBarThickness = 4
+leftList.ScrollBarImageColor3 = Color3.fromRGB(100, 100, 150)
+leftList.Parent = leftChat
+
+local leftLayout = Instance.new("UIListLayout")
+leftLayout.Padding = UDim.new(0, 8)
+leftLayout.SortOrder = Enum.SortOrder.LayoutOrder
+leftLayout.Parent = leftList
+
+local leftPadding = Instance.new("UIPadding")
+leftPadding.PaddingBottom = UDim.new(0, 10)
+leftPadding.PaddingTop = UDim.new(0, 10)
+leftPadding.Parent = leftList
+
+-- 右边聊天栏（私聊）
+local rightChat = Instance.new("Frame")
+rightChat.Size = UDim2.new(0.48, 0, 1, 0)
+rightChat.Position = UDim2.new(0.52, 0, 0, 0)
+rightChat.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+rightChat.Parent = chatArea
+local rightCorner = Instance.new("UICorner")
+rightCorner.CornerRadius = UDim.new(0, 10)
+rightCorner.Parent = rightChat
+
+local rightTitle = Instance.new("TextLabel")
+rightTitle.Size = UDim2.new(1, 0, 0, 30)
+rightTitle.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+rightTitle.Text = "👤 私聊"
+rightTitle.TextColor3 = Color3.fromRGB(180, 180, 255)
+rightTitle.TextScaled = true
+rightTitle.Font = Enum.Font.GothamSemibold
+rightTitle.Parent = rightChat
+
+local rightList = Instance.new("ScrollingFrame")
+rightList.Size = UDim2.new(1, -10, 1, -50)
+rightList.Position = UDim2.new(0, 5, 0, 35)
+rightList.BackgroundTransparency = 1
+rightList.ScrollBarThickness = 4
+rightList.ScrollBarImageColor3 = Color3.fromRGB(100, 100, 150)
+rightList.Parent = rightChat
+local rightLayout = Instance.new("UIListLayout")
+rightLayout.Padding = UDim.new(0, 8)
+rightLayout.SortOrder = Enum.SortOrder.LayoutOrder
+rightLayout.Parent = rightList
+local rightPadding = Instance.new("UIPadding")
+rightPadding.PaddingBottom = UDim.new(0, 10)
+rightPadding.PaddingTop = UDim.new(0, 10)
+rightPadding.Parent = rightList
+
+-- 输入框
+local inputFrame = Instance.new("Frame")
+inputFrame.Size = UDim2.new(1, 0, 0, 70)
+inputFrame.Position = UDim2.new(0, 0, 1, -70)
+inputFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+inputFrame.Parent = mainFrame
+local inputCorner = Instance.new("UICorner")
+inputCorner.CornerRadius = UDim.new(0, 12)
+inputCorner.Parent = inputFrame
+
+local input = Instance.new("TextBox")
+input.Size = UDim2.new(0.85, -20, 0.7, 0)
+input.Position = UDim2.new(0, 10, 0, 10)
+input.PlaceholderText = "输入消息..."
 input.Text = ""
-input.TextSize = 16
-input.ClearTextOnFocus = false
-input.MultiLine = true
-input.TextWrapped = true
+input.TextColor3 = Color3.fromRGB(255, 255, 255)
+input.PlaceholderColor3 = Color3.fromRGB(150, 150, 170)
 input.BackgroundTransparency = 1
-input.TextColor3 = Color3.fromRGB(50, 50, 50)
-input.AutomaticSize = Enum.AutomaticSize.Y
+input.TextScaled = true
+input.Font = Enum.Font.Gotham
+input.ClearTextOnFocus = false
+input.Parent = inputFrame
 
 -- 发送按钮
-local sendBtn = Instance.new("TextButton", frame)
-sendBtn.Size = UDim2.new(0, 73, 0, 46)
-sendBtn.Position = UDim2.new(1, -84, 1, -94)
+local sendBtn = Instance.new("TextButton")
+sendBtn.Size = UDim2.new(0.13, 0, 0.7, 0)
+sendBtn.Position = UDim2.new(0.88, 0, 0, 10)
+sendBtn.BackgroundColor3 = Color3.fromRGB(60, 180, 255)
 sendBtn.Text = "发送"
-sendBtn.TextSize = 19
+sendBtn.TextColor3 = Color3.new(1, 1, 1)
+sendBtn.TextScaled = true
 sendBtn.Font = Enum.Font.GothamBold
-sendBtn.BackgroundColor3 = Color3.fromRGB(182, 200, 255)
-sendBtn.TextColor3 = Color3.fromRGB(50, 70, 120)
-Instance.new("UICorner", sendBtn).CornerRadius = UDim.new(0, 8)
+sendBtn.Parent = inputFrame
+local sendCorner = Instance.new("UICorner")
+sendCorner.CornerRadius = UDim.new(0, 8)
+sendCorner.Parent = sendBtn
 
--- 打字指示
-local typing = Instance.new("TextLabel", frame)
-typing.Text = ""
-typing.Font = Enum.Font.Gotham
-typing.TextSize = 13
-typing.TextColor3 = Color3.fromRGB(120, 140, 160)
-typing.BackgroundTransparency = 1
-typing.Size = UDim2.new(1, -21, 0, 18)
-typing.Position = UDim2.new(0, 10, 1, -80)
-
--- ============ 消息气泡（抄自 BS 脚本）============
-local function addBubble(sender, text, isMe, typingEffect)
-    local container = Instance.new("Frame", chatBox)
-    container.BackgroundTransparency = 1
-    container.Size = UDim2.new(1, 0, 0, 0)
-    container.AutomaticSize = Enum.AutomaticSize.Y
-
-    local lbl = Instance.new("TextLabel", container)
-    lbl.TextWrapped = true
-    lbl.Font = Enum.Font.Gotham
-    lbl.TextSize = 14
-    lbl.Text = ""
-    lbl.AutomaticSize = Enum.AutomaticSize.Y
-    lbl.Size = UDim2.new(0.75, 0, 0, 0)
-    lbl.BackgroundColor3 = isMe and Color3.fromRGB(200, 220, 255) or Color3.fromRGB(230, 240, 255)
-    lbl.TextColor3 = Color3.fromRGB(40, 40, 40)
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    Instance.new("UICorner", lbl).CornerRadius = UDim.new(0, 10)
-
-    local pad = Instance.new("UIPadding", lbl)
-    pad.PaddingTop = UDim.new(0, 7)
-    pad.PaddingBottom = UDim.new(0, 7)
-    pad.PaddingLeft = UDim.new(0, 9)
-    pad.PaddingRight = UDim.new(0, 9)
-
-    -- 小头像/名字标签
-    local nameLabel = Instance.new("TextLabel", container)
-    nameLabel.BackgroundTransparency = 1
-    nameLabel.Font = Enum.Font.GothamBold
-    nameLabel.TextSize = 11
-    nameLabel.TextColor3 = isMe and Color3.fromRGB(70, 110, 180) or Color3.fromRGB(90, 130, 90)
-    nameLabel.Text = sender
-    nameLabel.Size = UDim2.new(0.75, 0, 0, 15)
-    nameLabel.AutomaticSize = Enum.AutomaticSize.X
-
-    if isMe then
-        lbl.AnchorPoint = Vector2.new(1, 0)
-        lbl.Position = UDim2.new(1, 0, 0, 0)
-        lbl.TextXAlignment = Enum.TextXAlignment.Right
-        nameLabel.AnchorPoint = Vector2.new(1, 0)
-        nameLabel.Position = UDim2.new(1, 0, 0, 0)
-        nameLabel.TextXAlignment = Enum.TextXAlignment.Right
-    else
-        lbl.AnchorPoint = Vector2.new(0, 0)
-        lbl.Position = UDim2.new(0, 0, 0, 0)
-        nameLabel.AnchorPoint = Vector2.new(0, 0)
-        nameLabel.Position = UDim2.new(0, 0, 0, 0)
-    end
-
-    if typingEffect then
-        for i = 1, #text do
-            lbl.Text = string.sub(text, 1, i)
-            task.wait(0.03)
-        end
-    else
-        lbl.Text = text
-    end
-
-    -- 滚到底部
-    task.wait()
-    chatBox.CanvasPosition = Vector2.new(0, math.max(0, chatBox.AbsoluteCanvasSize.Y))
-
-    return container
+-- ==================== 聊天函数 ====================
+local function addChatMessage(text, color, side)
+    local chatFrame = side == "left" and leftList or rightList
+    local isPlayer = side == "left"
+    
+    local msg = Instance.new("Frame")
+    msg.Size = UDim2.new(1, 0, 0, 35)
+    msg.BackgroundColor3 = isPlayer and Color3.fromRGB(50, 80, 130) or Color3.fromRGB(40, 40, 50)
+    msg.BackgroundTransparency = 0.3
+    msg.Parent = chatFrame
+    
+    local msgCorner = Instance.new("UICorner")
+    msgCorner.CornerRadius = UDim.new(0, 6)
+    msgCorner.Parent = msg
+    
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, -10, 1, 0)
+    label.Position = UDim2.new(0, 5, 0, 0)
+    label.BackgroundTransparency = 1
+    label.Text = text
+    label.TextColor3 = color
+    label.TextScaled = true
+    label.Font = Enum.Font.Gotham
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = msg
 end
 
--- ============ API 调用（Cloudflare Worker 中转，game:HttpGet）============
--- 你的环境只有 game:HttpGet 能访问第三方域名（request/RequestAsync 都被 Roblox 域名白名单挡）
--- 所以请求走 Worker：HttpGet → Worker 转发 Agnes API → 返回回复文本
-local function callAI(text, imgUrl)
-    local url = WORKER_URL .. "?msg=" .. HttpService:UrlEncode(text)
-    if imgUrl and imgUrl ~= "" then
-        url = url .. "&img=" .. HttpService:UrlEncode(imgUrl)
-    end
-
-    -- HttpGet 超时约 10 秒，AI 回复慢可能失败，重试 2 次
-    local ok, body
-    for attempt = 1, 3 do
-        ok, body = pcall(function()
-            return game:HttpGet(url)
-        end)
-        if ok then break end
-        task.wait(1.5)
-    end
-    if not ok then
-        return "（请求失败：" .. tostring(body) .. "）"
-    end
-
-    local okDecode, data = pcall(function()
-        return HttpService:JSONDecode(body)
-    end)
-    if okDecode and data then
-        if data.ok and data.reply then
-            return data.reply
-        end
-        return "（" .. tostring(data.error or "未知错误") .. "）"
-    end
-    return "（响应解析失败：" .. tostring(body):sub(1, 120) .. "）"
-end
-
--- ============ 发送逻辑（抄自 BS 脚本）============
-local busy = false
-local currentMessages = {}
-local lastUserMessage = nil
-
-local function send(text, isRetry)
-    if busy then return end
-    text = string.gsub(text, "^%s*(.-)%s*$", "%1")
-    if text == "" then return end
-
-    if not isRetry then
-        lastUserMessage = text
-    end
-
-    addBubble("你", text, true, false)
-    input.Text = ""
-    busy = true
-    typing.Text = "Agnes正在输入…"
-
-    -- 图片模式：img <URL> <问题>
-    local aiText = text
-    local imgUrl = nil
-    if text:match("^[iI][mM][gG]%s+") then
-        local _, _, url, question = text:find("^[iI][mM][gG]%s+(%S+)%s*(.-)$")
-        url = url or ""
-        question = question or ""
-        if url == "" then
-            typing.Text = ""
-            busy = false
-            addBubble("系统", "格式：img <图片URL> <问题>", false, false)
-            return
-        end
-        imgUrl = url
-        aiText = question ~= "" and question or "请用中文描述这张图片"
-    end
-
-    table.insert(currentMessages, { role = "user", content = text })
-    -- 裁剪上下文（保留最近 10 轮）
-    while #currentMessages > 20 do
-        table.remove(currentMessages, 1)
-        table.remove(currentMessages, 1)
-    end
-
-    local reply = callAI(aiText, imgUrl)
-    typing.Text = ""
-
-    if busy then
-        table.insert(currentMessages, { role = "assistant", content = reply })
-        addBubble("Agnes", reply, false, true)
-        busy = false
-    end
-end
-
--- 发送绑定
+-- ==================== 发送逻辑（现在只是打印，AI等会加） ====================
 sendBtn.MouseButton1Click:Connect(function()
-    send(input.Text)
+    local msg = input.Text
+    if msg == "" then return end
+    
+    -- 显示消息
+    addChatMessage("你: " .. msg, Color3.fromRGB(255, 255, 200), "left")
+    input.Text = ""
+    
+    -- 打印给控制台（你可以自己加 AI 逻辑）
+    print("[你发送] " .. msg)
+    
+    -- TODO: 这里等你给令牌后我再加 AI 转发
 end)
 
-input.FocusLost:Connect(function(enterPressed)
-    if enterPressed and not UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
-        send(input.Text)
-    end
+closeBtn.MouseButton1Click:Connect(function()
+    screenGui:Destroy()
 end)
 
--- 欢迎消息
-addBubble("Agnes", "你好！我是 Agnes AI 助手（" .. MODEL .. "）。\n\n直接输入文字聊天；想看图片输入：\nimg <图片URL> <问题>", false, false)
+-- ==================== 预设消息（可选好看） ====================
+local function sendDemoMessage()
+    addChatMessage("系统: 欢迎来到聊天系统！", Color3.fromRGB(100, 255, 100), "left")
+end
 
-print("[AI助手] 已加载（BS 风格 UI），Enter 发送，img <URL> 解析图片")
+-- 启动时显示欢迎
+sendDemoMessage()
+
+-- 让滚动条自动滚到底
+RunService.Heartbeat:Connect(function()
+    leftList.CanvasPosition = Vector2.new(0, leftList.AbsoluteContentSize.Y)
+    rightList.CanvasPosition = Vector2.new(0, rightList.AbsoluteContentSize.Y)
+end)
+
+print("✅ 聊天系统 GUI 已加载！（等你给令牌我加 AI 功能）")
