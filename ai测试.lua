@@ -1,4 +1,4 @@
--- Roblox WindUI 风格 AI 聊天界面组件 (带文本长按选中与复制功能)
+-- Roblox WindUI 风格 AI 聊天界面组件 (带自动关闭遮罩的复制/选择功能)
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
@@ -63,137 +63,7 @@ CreateTween(MainFrame, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDir
 })
 
 -- ==========================================
--- 3. 全局 Toast 提示框 & 长按上下文菜单
--- ==========================================
--- Toast 提示组件
-local Toast = Instance.new("Frame")
-Toast.Size = UDim2.fromOffset(140, 30)
-Toast.Position = UDim2.new(0.5, -70, 0.08, -10)
-Toast.BackgroundColor3 = Theme.Card
-Toast.BorderSizePixel = 0
-Toast.Visible = false
-Toast.ZIndex = 200
-Toast.Parent = ScreenGui
-
-local ToastCorner = Instance.new("UICorner", Toast)
-ToastCorner.CornerRadius = UDim.new(0, 6)
-
-local ToastStroke = Instance.new("UIStroke", Toast)
-ToastStroke.Color = Theme.Accent
-ToastStroke.Thickness = 1
-
-local ToastLabel = Instance.new("TextLabel")
-ToastLabel.Size = UDim2.new(1, 0, 1, 0)
-ToastLabel.BackgroundTransparency = 1
-ToastLabel.Text = "已选中/复制文本"
-ToastLabel.TextColor3 = Theme.Text
-ToastLabel.Font = Enum.Font.GothamBold
-ToastLabel.TextSize = 12
-ToastLabel.ZIndex = 201
-ToastLabel.Parent = Toast
-
-local function ShowToast(msg)
-    ToastLabel.Text = msg
-    Toast.Position = UDim2.new(0.5, -70, 0.08, -10)
-    Toast.Visible = true
-    CreateTween(Toast, TweenInfo.new(0.2, Enum.EasingStyle.Out), {
-        Position = UDim2.new(0.5, -70, 0.08, 10)
-    })
-    task.delay(1.2, function()
-        local t = CreateTween(Toast, TweenInfo.new(0.2, Enum.EasingStyle.In), {
-            Position = UDim2.new(0.5, -70, 0.08, -10)
-        })
-        t.Completed:Connect(function()
-            Toast.Visible = false
-        end)
-    end)
-end
-
--- 长按弹出的快捷菜单
-local ContextMenu = Instance.new("Frame")
-ContextMenu.Name = "ContextMenu"
-ContextMenu.Size = UDim2.fromOffset(0, 0)
-ContextMenu.BackgroundColor3 = Theme.Card
-ContextMenu.BorderSizePixel = 0
-ContextMenu.Visible = false
-ContextMenu.ClipsDescendants = true
-ContextMenu.ZIndex = 100
-ContextMenu.Parent = ScreenGui
-
-local ContextCorner = Instance.new("UICorner", ContextMenu)
-ContextCorner.CornerRadius = UDim.new(0, 6)
-
-local ContextStroke = Instance.new("UIStroke", ContextMenu)
-ContextStroke.Color = Theme.Outline
-ContextStroke.Thickness = 1
-
-local CopyBtn = Instance.new("TextButton")
-CopyBtn.Size = UDim2.new(1, 0, 1, 0)
-CopyBtn.BackgroundTransparency = 1
-CopyBtn.Text = "复制/全选"
-CopyBtn.TextColor3 = Theme.Text
-CopyBtn.Font = Enum.Font.GothamBold
-CopyBtn.TextSize = 12
-CopyBtn.ZIndex = 101
-CopyBtn.Parent = ContextMenu
-
-local activeTargetText = ""
-local activeTextBox = nil
-
-local function ShowContextMenu(pos, textBox, msgText)
-    activeTargetText = msgText
-    activeTextBox = textBox
-    
-    ContextMenu.Position = UDim2.fromOffset(pos.X - 45, math.max(10, pos.Y - 36))
-    ContextMenu.Size = UDim2.fromOffset(0, 0)
-    ContextMenu.Visible = true
-    
-    CreateTween(ContextMenu, TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-        Size = UDim2.fromOffset(90, 30)
-    })
-end
-
-local function HideContextMenu()
-    if not ContextMenu.Visible then return end
-    local t = CreateTween(ContextMenu, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
-        Size = UDim2.fromOffset(0, 0)
-    })
-    t.Completed:Connect(function()
-        ContextMenu.Visible = false
-    end)
-end
-
--- 点击空白处隐藏菜单
-UserInputService.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        task.delay(0.05, function()
-            HideContextMenu()
-        end)
-    end
-end)
-
--- 快捷复制按键点击事件
-CopyBtn.MouseButton1Click:Connect(function()
-    if activeTextBox and activeTargetText then
-        -- 1. 高亮选中文本
-        activeTextBox:CaptureFocus()
-        activeTextBox.SelectionStart = 1
-        activeTextBox.CursorPosition = string.len(activeTargetText) + 1
-
-        -- 2. 尝试将文本放入系统剪贴板 (如果脚本环境支持)
-        pcall(function()
-            if setclipboard then
-                setclipboard(activeTargetText)
-            end
-        end)
-
-        ShowToast("已选中/复制文本")
-    end
-    HideContextMenu()
-end)
-
--- ==========================================
--- 4. 右上角控制按键
+-- 3. 右上角控制按键
 -- ==========================================
 local ControlBar = Instance.new("Frame")
 ControlBar.Size = UDim2.new(1, 0, 0, 36)
@@ -252,7 +122,7 @@ CloseBtn.MouseButton1Click:Connect(function()
 end)
 
 -- ==========================================
--- 5. 悬浮球 (最小化模式)
+-- 4. 悬浮球 (最小化模式)
 -- ==========================================
 local FloatingBall = Instance.new("TextButton")
 FloatingBall.Name = "FloatingBall"
@@ -324,7 +194,7 @@ FloatingBall.MouseButton1Click:Connect(function()
 end)
 
 -- ==========================================
--- 6. 侧边栏
+-- 5. 侧边栏
 -- ==========================================
 local Sidebar = Instance.new("Frame")
 Sidebar.Size = UDim2.new(0, 160, 1, 0)
@@ -394,7 +264,7 @@ local function UpdateSidebarSelection(activeBtn)
 end
 
 -- ==========================================
--- 7. 右侧聊天与输入区域
+-- 6. 右侧聊天与输入区域
 -- ==========================================
 local ChatArea = Instance.new("Frame")
 ChatArea.Size = UDim2.new(1, -160, 1, -36)
@@ -460,35 +330,118 @@ SendCorner.CornerRadius = UDim.new(0, 4)
 AddButtonHover(SendBtn, Theme.Accent, Theme.AccentHover)
 
 -- ==========================================
--- 8. 长按监测绑定与气泡渲染
+-- 7. 长按 / 右键 ContextMenu 浮窗及全屏关闭遮罩
 -- ==========================================
-local function BindLongPress(targetUI, textBox, msgText)
-    local isHolding = false
-    local currentHoldTime = 0
+-- 全屏透明遮罩：点击屏幕任何空白处直接关闭右键菜单并释放文本焦点
+local MenuOverlay = Instance.new("TextButton")
+MenuOverlay.Name = "MenuOverlay"
+MenuOverlay.Size = UDim2.fromScale(1, 1)
+MenuOverlay.BackgroundTransparency = 1
+MenuOverlay.Text = ""
+MenuOverlay.Visible = false
+MenuOverlay.ZIndex = 8
+MenuOverlay.Parent = ScreenGui
 
-    targetUI.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton2 then
-            -- 右键触发菜单
-            ShowContextMenu(Vector2.new(input.Position.X, input.Position.Y), textBox, msgText)
-        elseif input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            isHolding = true
-            local holdId = tick()
-            currentHoldTime = holdId
-            task.delay(0.4, function() -- 长按 0.4 秒触发
-                if isHolding and currentHoldTime == holdId then
-                    ShowContextMenu(Vector2.new(input.Position.X, input.Position.Y), textBox, msgText)
-                end
-            end)
-        end
-    end)
+local ContextMenu = Instance.new("Frame")
+ContextMenu.Name = "ContextMenu"
+ContextMenu.Size = UDim2.fromOffset(110, 68)
+ContextMenu.BackgroundColor3 = Theme.Card
+ContextMenu.BorderSizePixel = 0
+ContextMenu.Visible = false
+ContextMenu.ZIndex = 10
+ContextMenu.Parent = ScreenGui
 
-    targetUI.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            isHolding = false
-        end
-    end)
+local ContextCorner = Instance.new("UICorner", ContextMenu)
+ContextCorner.CornerRadius = UDim.new(0, 6)
+
+local ContextStroke = Instance.new("UIStroke", ContextMenu)
+ContextStroke.Color = Theme.Outline
+ContextStroke.Thickness = 1
+
+local ContextLayout = Instance.new("UIListLayout")
+ContextLayout.SortOrder = Enum.SortOrder.LayoutOrder
+ContextLayout.Padding = UDim.new(0, 2)
+ContextLayout.Parent = ContextMenu
+
+local ContextPadding = Instance.new("UIPadding", ContextMenu)
+ContextPadding.PaddingTop = UDim.new(0, 4)
+ContextPadding.PaddingBottom = UDim.new(0, 4)
+ContextPadding.PaddingLeft = UDim.new(0, 4)
+ContextPadding.PaddingRight = UDim.new(0, 4)
+
+local function CreateContextItem(text, layoutOrder)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 0, 28)
+    btn.BackgroundColor3 = Theme.Card
+    btn.Text = text
+    btn.TextColor3 = Theme.Text
+    btn.Font = Enum.Font.Gotham
+    btn.TextSize = 12
+    btn.ZIndex = 11
+    btn.AutoButtonColor = false
+    btn.LayoutOrder = layoutOrder
+    btn.Parent = ContextMenu
+
+    local corner = Instance.new("UICorner", btn)
+    corner.CornerRadius = UDim.new(0, 4)
+
+    AddButtonHover(btn, Theme.Card, Theme.CardHover)
+    return btn
 end
 
+local CopyAllBtn = CreateContextItem("全选高亮", 1)
+local PasteToInputBtn = CreateContextItem("填入输入框", 2)
+
+local ActiveTargetBox = nil
+local ActiveTargetText = ""
+
+local function HideContextMenu()
+    ContextMenu.Visible = false
+    MenuOverlay.Visible = false
+    if ActiveTargetBox then
+        ActiveTargetBox:ReleaseFocus()
+        ActiveTargetBox = nil
+    end
+end
+
+-- 遮罩点击事件：点击任意地方关闭
+MenuOverlay.MouseButton1Click:Connect(HideContextMenu)
+
+-- 全选高亮该条消息
+CopyAllBtn.MouseButton1Click:Connect(function()
+    if ActiveTargetBox then
+        ActiveTargetBox:CaptureFocus()
+        ActiveTargetBox.SelectionStart = 1
+        ActiveTargetBox.CursorPosition = #ActiveTargetBox.Text + 1
+    end
+    ContextMenu.Visible = false
+    MenuOverlay.Visible = false
+end)
+
+-- 填入下方输入框
+PasteToInputBtn.MouseButton1Click:Connect(function()
+    if ActiveTargetText ~= "" then
+        InputBox.Text = ActiveTargetText
+        InputBox:CaptureFocus()
+    end
+    HideContextMenu()
+end)
+
+local function ShowContextMenuAt(pos, targetBox, text)
+    ActiveTargetBox = targetBox
+    ActiveTargetText = text
+    ContextMenu.Position = UDim2.fromOffset(pos.X, pos.Y - 36)
+    ContextMenu.Visible = true
+    MenuOverlay.Visible = true
+    ContextMenu.Size = UDim2.fromOffset(110, 0)
+    CreateTween(ContextMenu, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        Size = UDim2.fromOffset(110, 68)
+    })
+end
+
+-- ==========================================
+-- 8. 核心隔离逻辑 & 可选择复制消息气泡
+-- ==========================================
 local Sessions = {}
 local CurrentSessionId = nil
 local SessionCounter = 0
@@ -508,21 +461,41 @@ local function AddMessageBubble(sender, text, animate)
     local BubbleCorner = Instance.new("UICorner", Bubble)
     BubbleCorner.CornerRadius = UDim.new(0, 8)
 
-    -- 使用 TextBox 替换 TextLabel，开启自由划词选中
-    local MsgTextBox = Instance.new("TextBox")
-    MsgTextBox.Size = UDim2.new(1, -16, 1, -12)
-    MsgTextBox.Position = UDim2.new(0, 8, 0, 6)
-    MsgTextBox.BackgroundTransparency = 1
-    MsgTextBox.Text = text
-    MsgTextBox.TextColor3 = Theme.Text
-    MsgTextBox.Font = Enum.Font.Gotham
-    MsgTextBox.TextSize = 12
-    MsgTextBox.TextWrapped = true
-    MsgTextBox.TextXAlignment = Enum.TextXAlignment.Left
-    MsgTextBox.TextYAlignment = Enum.TextYAlignment.Top
-    MsgTextBox.TextEditable = false -- 禁止玩家随意更改 AI/用户 历史内容
-    MsgTextBox.ClearTextOnFocus = false
-    MsgTextBox.Parent = Bubble
+    local MsgBox = Instance.new("TextBox")
+    MsgBox.Size = UDim2.new(1, -16, 1, -12)
+    MsgBox.Position = UDim2.new(0, 8, 0, 6)
+    MsgBox.BackgroundTransparency = 1
+    MsgBox.Text = text
+    MsgBox.TextColor3 = Theme.Text
+    MsgBox.Font = Enum.Font.Gotham
+    MsgBox.TextSize = 12
+    MsgBox.TextWrapped = true
+    MsgBox.TextXAlignment = Enum.TextXAlignment.Left
+    MsgBox.TextYAlignment = Enum.TextYAlignment.Top
+    MsgBox.TextEditable = false          -- 不可更改文本
+    MsgBox.ClearTextOnFocus = false
+    MsgBox.Active = true
+    MsgBox.Parent = Bubble
+
+    -- 触摸/鼠标交互逻辑
+    local holdThread = nil
+    MsgBox.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton2 then
+            ShowContextMenuAt(input.Position, MsgBox, text)
+        elseif input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            local startPos = input.Position
+            holdThread = task.delay(0.4, function()
+                ShowContextMenuAt(startPos, MsgBox, text)
+            end)
+        end
+    end)
+
+    MsgBox.InputEnded:Connect(function(input)
+        if holdThread then
+            task.cancel(holdThread)
+            holdThread = nil
+        end
+    end)
 
     local TextBound = TextService:GetTextSize(
         text, 12, Enum.Font.Gotham, Vector2.new(250, 2000)
@@ -533,23 +506,19 @@ local function AddMessageBubble(sender, text, animate)
     
     RowFrame.Size = UDim2.new(1, 0, 0, bubbleHeight)
     local finalPosX = isUser and UDim2.new(1, -bubbleWidth, 0, 0) or UDim2.new(0, 0, 0, 0)
-
-    -- 绑定长按 / 右键选择复制事件
-    BindLongPress(Bubble, MsgTextBox, text)
-    BindLongPress(MsgTextBox, MsgTextBox, text)
     
     if animate then
         Bubble.Size = UDim2.fromOffset(bubbleWidth, 0)
         Bubble.Position = finalPosX + UDim2.fromOffset(0, 10)
         Bubble.BackgroundTransparency = 1
-        MsgTextBox.TextTransparency = 1
+        MsgBox.TextTransparency = 1
 
         CreateTween(Bubble, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
             Size = UDim2.fromOffset(bubbleWidth, bubbleHeight),
             Position = finalPosX,
             BackgroundTransparency = 0
         })
-        CreateTween(MsgTextBox, TweenInfo.new(0.2), {TextTransparency = 0})
+        CreateTween(MsgBox, TweenInfo.new(0.2), {TextTransparency = 0})
     else
         Bubble.Size = UDim2.fromOffset(bubbleWidth, bubbleHeight)
         Bubble.Position = finalPosX
@@ -624,7 +593,7 @@ local function SendMessage()
     AddMessageBubble("User", text, true)
 
     task.delay(0.5, function()
-        local aiReply = "【AI回复】收到: " .. text .. "\n(你可以长按本条文本体验全选与复制)"
+        local aiReply = "【AI回复】收到: " .. text .. "\n(上下文隔离正常运作)"
         table.insert(Sessions[CurrentSessionId].Messages, {Sender = "AI", Content = aiReply})
         AddMessageBubble("AI", aiReply, true)
     end)
@@ -637,5 +606,5 @@ end)
 
 NewChatBtn.MouseButton1Click:Connect(CreateNewSession)
 
--- 初始化默认对话
+-- 初始化生成第一个新对话
 CreateNewSession()
