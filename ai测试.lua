@@ -1,4 +1,4 @@
--- Roblox WindUI 风格 AI 聊天界面组件 (修复卡死版)
+-- Roblox WindUI 风格 AI 聊天界面组件
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
@@ -35,7 +35,7 @@ ScreenGui.Name = "WindUI_AIChat"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
--- 尺寸配置 (精简尺寸: 620 x 400)
+-- 尺寸配置 (620 x 400)
 local NormalSize = UDim2.fromOffset(620, 400)
 local NormalPos = UDim2.new(0.5, -310, 0.5, -200)
 
@@ -56,14 +56,14 @@ local MainStroke = Instance.new("UIStroke", MainFrame)
 MainStroke.Color = Theme.Outline
 MainStroke.Thickness = 1
 
--- 打开动画 (从中心平滑弹窗放大)
+-- 打开动画
 CreateTween(MainFrame, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
     Size = NormalSize,
     Position = NormalPos
 })
 
 -- ==========================================
--- 3. 右上角控制按键与动画
+-- 3. 右上角控制按键（已移除放大功能）
 -- ==========================================
 local ControlBar = Instance.new("Frame")
 ControlBar.Size = UDim2.new(1, 0, 0, 36)
@@ -108,23 +108,9 @@ local function CreateControlButton(iconText, isClose)
     return btn
 end
 
--- 高兼容字符，避免出现“口”
+-- 仅保留最小化与关闭按键
 local MinBtn = CreateControlButton("-", false)
-local MaxBtn = CreateControlButton("[]", false)
 local CloseBtn = CreateControlButton("X", true)
-
--- 全屏切换
-local isMaximized = false
-MaxBtn.MouseButton1Click:Connect(function()
-    isMaximized = not isMaximized
-    local targetSize = isMaximized and UDim2.new(1, 0, 1, 0) or NormalSize
-    local targetPos = isMaximized and UDim2.new(0, 0, 0, 0) or NormalPos
-    
-    CreateTween(MainFrame, TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
-        Size = targetSize,
-        Position = targetPos
-    })
-end)
 
 -- 关闭动画
 CloseBtn.MouseButton1Click:Connect(function()
@@ -206,8 +192,8 @@ FloatingBall.MouseButton1Click:Connect(function()
         MainFrame.Visible = true
         MainFrame.Position = FloatingBall.Position
         CreateTween(MainFrame, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-            Size = isMaximized and UDim2.new(1, 0, 1, 0) or NormalSize,
-            Position = isMaximized and UDim2.new(0, 0, 0, 0) or NormalPos
+            Size = NormalSize,
+            Position = NormalPos
         })
     end)
 end)
@@ -264,6 +250,25 @@ HistoryLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
     HistoryScroll.CanvasSize = UDim2.new(0, 0, 0, HistoryLayout.AbsoluteContentSize.Y + 10)
 end)
 
+-- 统一处理侧边栏选项卡的高亮选中状态
+local function UpdateSidebarSelection(activeBtn)
+    for _, child in ipairs(HistoryScroll:GetChildren()) do
+        if child:IsA("TextButton") then
+            if child == activeBtn then
+                CreateTween(child, TweenInfo.new(0.2), {
+                    BackgroundColor3 = Theme.Accent,
+                    TextColor3 = Theme.Text
+                })
+            else
+                CreateTween(child, TweenInfo.new(0.2), {
+                    BackgroundColor3 = Theme.Card,
+                    TextColor3 = Theme.TextSub
+                })
+            end
+        end
+    end
+end
+
 -- ==========================================
 -- 6. 右侧聊天与输入区域
 -- ==========================================
@@ -291,7 +296,7 @@ MessageLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
     MessageScroll.CanvasPosition = Vector2.new(0, 99999)
 end)
 
--- 输入框
+-- 输入框容器
 local InputContainer = Instance.new("Frame")
 InputContainer.Size = UDim2.new(1, -16, 0, 36)
 InputContainer.Position = UDim2.new(0, 8, 1, -44)
@@ -302,7 +307,7 @@ local InputCorner = Instance.new("UICorner", InputContainer)
 InputCorner.CornerRadius = UDim.new(0, 6)
 
 local InputBox = Instance.new("TextBox")
-InputBox.Size = UDim2.new(1, -44, 1, 0)
+InputBox.Size = UDim2.new(1, -62, 1, 0)
 InputBox.Position = UDim2.new(0, 8, 0, 0)
 InputBox.BackgroundTransparency = 1
 InputBox.PlaceholderText = "发送消息给 AI..."
@@ -315,14 +320,15 @@ InputBox.TextXAlignment = Enum.TextXAlignment.Left
 InputBox.ClearTextOnFocus = false
 InputBox.Parent = InputContainer
 
+-- 修改为中文“发送”按键
 local SendBtn = Instance.new("TextButton")
-SendBtn.Size = UDim2.fromOffset(26, 24)
-SendBtn.Position = UDim2.new(1, -30, 0.5, -12)
+SendBtn.Size = UDim2.fromOffset(44, 26)
+SendBtn.Position = UDim2.new(1, -48, 0.5, -13)
 SendBtn.BackgroundColor3 = Theme.Accent
-SendBtn.Text = ">"
+SendBtn.Text = "发送"
 SendBtn.TextColor3 = Theme.Text
 SendBtn.Font = Enum.Font.GothamBold
-SendBtn.TextSize = 13
+SendBtn.TextSize = 12
 SendBtn.AutoButtonColor = false
 SendBtn.Parent = InputContainer
 
@@ -432,6 +438,7 @@ local function CreateNewSession()
     local ItemCorner = Instance.new("UICorner", ItemBtn)
     ItemCorner.CornerRadius = UDim.new(0, 5)
 
+    -- 鼠标悬停未选中项的反馈
     ItemBtn.MouseEnter:Connect(function()
         if CurrentSessionId ~= id then
             CreateTween(ItemBtn, TweenInfo.new(0.15), {BackgroundColor3 = Theme.CardHover})
@@ -443,18 +450,14 @@ local function CreateNewSession()
         end
     end)
 
+    -- 点击切换对话
     ItemBtn.MouseButton1Click:Connect(function()
-        for _, btn in ipairs(HistoryScroll:GetChildren()) do
-            if btn:IsA("TextButton") then
-                CreateTween(btn, TweenInfo.new(0.2), {BackgroundColor3 = Theme.Card, TextColor3 = Theme.TextSub})
-            end
-        end
-        CreateTween(ItemBtn, TweenInfo.new(0.2), {BackgroundColor3 = Theme.Accent, TextColor3 = Theme.Text})
+        UpdateSidebarSelection(ItemBtn)
         LoadSession(id)
     end)
 
-    ItemBtn.BackgroundColor3 = Theme.Accent
-    ItemBtn.TextColor3 = Theme.Text
+    -- 新建对话时自动更新高亮选中状态，并重置其他对话为未选中状态
+    UpdateSidebarSelection(ItemBtn)
     LoadSession(id)
 end
 
@@ -481,5 +484,5 @@ end)
 
 NewChatBtn.MouseButton1Click:Connect(CreateNewSession)
 
--- 初始化默认对话
+-- 初始化生成第一个新对话
 CreateNewSession()
