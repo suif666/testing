@@ -1,7 +1,3 @@
--- po大po 功能（远程脚本格式，挂主脚本"po大po" Tab）
--- 移植自小西源码/po大po.lua：自动售卖 / 卡服 / 自动拉屎
--- 主脚本需设置：getgenv().Tabs.POTab（或 getgenv().SuturePOTab）
-
 if getgenv().__SUTURE_PO_LOADED then
     return
 end
@@ -97,5 +93,3 @@ Tab:Toggle({
         end
     end
 })
-
-print("[po大po] 功能已挂载")
