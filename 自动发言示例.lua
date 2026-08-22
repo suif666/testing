@@ -123,16 +123,18 @@ local uiOk, uiErr = pcall(function()
 
     Players.PlayerAdded:Connect(function() updateList(false) end)
     Players.PlayerRemoving:Connect(function() updateList(false) end)
-    task.spawn(function()
-        while true do
-            task.wait(30)  -- 玩家进出已由事件实时更新，这只是兜底，30s 一次足够
-            updateList(false)
-        end
-    end)
 
     updateList(true)
 
     -- ===== UI：发言设置 =====
+    Tab:Button({
+        Title = "刷新玩家列表",
+        Desc = "手动刷新私聊目标列表（玩家进出会自动更新，列表异常时点这个）",
+        Icon = "refresh-cw",
+        Callback = function()
+            updateList(true)
+        end
+    })
     Tab:Input({
         Title = "发言内容",
         Desc = "要发送的话",
