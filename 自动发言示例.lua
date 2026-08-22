@@ -125,7 +125,7 @@ local uiOk, uiErr = pcall(function()
     Players.PlayerRemoving:Connect(function() updateList(false) end)
     task.spawn(function()
         while true do
-            task.wait(5)
+            task.wait(30)  -- 玩家进出已由事件实时更新，这只是兜底，30s 一次足够
             updateList(false)
         end
     end)
