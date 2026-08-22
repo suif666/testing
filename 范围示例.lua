@@ -1,6 +1,3 @@
--- 把其他玩家的 HumanoidRootPart 放大成可自由调节大小的红色半透明立方体
--- 因为是真实根部件：射线子弹、Touched 近战都能正常命中
-
 local WindUI
 do
     local ok, res = pcall(function()
