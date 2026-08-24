@@ -121,9 +121,6 @@ local uiOk, uiErr = pcall(function()
         end
     })
 
-    Players.PlayerAdded:Connect(function() updateList(false) end)
-    Players.PlayerRemoving:Connect(function() updateList(false) end)
-
     updateList(true)
 
     -- ===== UI：发言设置 =====
