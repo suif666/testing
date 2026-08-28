@@ -35,33 +35,37 @@ do
     origGravity = workspace.Gravity or origGravity
 end
 
--- ============ 移动速度 / 跳跃高度（默认一直锁定，初始值取游戏实际值） ============
+-- ============ 移动速度 / 跳跃高度（默认不锁定！避免加载即干扰游戏移动导致漂移） ============
+-- 只有用户在 UI 里拖动"移动速度/跳跃高度"滑块后才会开始锁定（AutoLock = true）
 getgenv().SutureMoveCfg = getgenv().SutureMoveCfg or {}
 if getgenv().SutureMoveCfg.WalkSpeed == nil then getgenv().SutureMoveCfg.WalkSpeed = origWalkSpeed end
 if getgenv().SutureMoveCfg.JumpPower == nil then getgenv().SutureMoveCfg.JumpPower = origJumpPower end
+if getgenv().SutureMoveCfg.AutoLock == nil then getgenv().SutureMoveCfg.AutoLock = false end
 
 local MoveCfg = getgenv().SutureMoveCfg
 
 local function applyMovementToHumanoid(h)
     if not h or not h.Parent then return end
-    if h.WalkSpeed ~= MoveCfg.WalkSpeed then
-        h.WalkSpeed = MoveCfg.WalkSpeed
-    end
-    if not h.UseJumpPower then
-        h.UseJumpPower = true
-    end
-    if h.JumpPower ~= MoveCfg.JumpPower then
-        h.JumpPower = MoveCfg.JumpPower
-    end
-    -- 跳跃高度过高时落地会摔死，自动挂隐形保护罩（只加不删，避免误删游戏自带的）
-    if h.JumpPower > 120 and h.Parent then
-        pcall(function()
-            if not h.Parent:FindFirstChildOfClass("ForceField") then
-                local ff = Instance.new("ForceField")
-                ff.Visible = false
-                ff.Parent = h.Parent
-            end
-        end)
+    if MoveCfg.AutoLock then
+        if h.WalkSpeed ~= MoveCfg.WalkSpeed then
+            h.WalkSpeed = MoveCfg.WalkSpeed
+        end
+        if not h.UseJumpPower then
+            h.UseJumpPower = true
+        end
+        if h.JumpPower ~= MoveCfg.JumpPower then
+            h.JumpPower = MoveCfg.JumpPower
+        end
+        -- 跳跃高度过高时落地会摔死，自动挂隐形保护罩（只加不删，避免误删游戏自带的）
+        if h.JumpPower > 120 and h.Parent then
+            pcall(function()
+                if not h.Parent:FindFirstChildOfClass("ForceField") then
+                    local ff = Instance.new("ForceField")
+                    ff.Visible = false
+                    ff.Parent = h.Parent
+                end
+            end)
+        end
     end
 end
 
@@ -75,6 +79,7 @@ end
 getgenv().SutureMoveToken = (getgenv().SutureMoveToken or 0) + 1
 local MoveToken = getgenv().SutureMoveToken
 
+-- 循环保留，但 AutoLock = false 时什么都不做（零干扰）
 task.spawn(function()
     while getgenv().SutureMoveToken == MoveToken do
         applyMovement()
@@ -282,6 +287,7 @@ local uiOk, uiErr = pcall(function()
         Value = { Min = 1, Max = 100, Default = MoveCfg.WalkSpeed or origWalkSpeed },
         Callback = function(v)
             MoveCfg.WalkSpeed = tonumber(v) or 16
+            MoveCfg.AutoLock = true   -- 用户主动调整后开始锁定
             applyMovement()
         end
     })
@@ -293,6 +299,7 @@ local uiOk, uiErr = pcall(function()
         Value = { Min = 1, Max = 200, Default = MoveCfg.JumpPower or origJumpPower },
         Callback = function(v)
             MoveCfg.JumpPower = tonumber(v) or 50
+            MoveCfg.AutoLock = true   -- 用户主动调整后开始锁定
             applyMovement()
         end
     })
@@ -328,6 +335,7 @@ local uiOk, uiErr = pcall(function()
         Callback = function()
             MoveCfg.WalkSpeed = origWalkSpeed
             MoveCfg.JumpPower = origJumpPower
+            MoveCfg.AutoLock = false   -- 恢复初始后停止锁定，避免再次干扰
             PlayerExtra.GravityLock = false
             PlayerExtra.Gravity = origGravity / 19.62
             workspace.Gravity = origGravity
