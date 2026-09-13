@@ -4,13 +4,17 @@
 if getgenv().__SUTURE_PLAYER_LOADED then
     return
 end
-getgenv().__SUTURE_PLAYER_LOADED = true
 
 local Tab = (getgenv().Tabs and getgenv().Tabs.PlayerTab) or getgenv().SuturePlayerTab
 if not Tab then
     warn("[玩家类] 未找到 PlayerTab，请检查主脚本是否正确赋值")
     return
 end
+
+-- 确认 Tab 拿到后才标记已加载。
+-- （原实现把标志位设在 Tab 检查之前：一旦首次加载时 Tab 未就绪，
+--   就会永久标记为已加载，之后点 Tab 重新加载也会被直接 return，UI 再也建不出来）
+getgenv().__SUTURE_PLAYER_LOADED = true
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -36,35 +40,63 @@ do
 end
 
 -- ============ 移动速度 / 跳跃高度（默认不锁定！避免加载即干扰游戏移动导致漂移） ============
--- 只有用户在 UI 里拖动"移动速度/跳跃高度"滑块后才会开始锁定（AutoLock = true）
+-- 本版改动（参考主流 hub 写法）：
+--   1. 速度与跳跃【各自独立锁定】：拖"移动速度"不再顺带改动跳跃。
+--      原实现是一个 AutoLock 同时管速度和跳跃，一拖速度就会强制 UseJumpPower=true
+--      并覆盖 JumpPower —— 调速度等于顺手改了跳跃手感，这是"移动类功能不对劲"的主因。
+--   2. 锁定方式改为 RunService.Heartbeat【每帧】检查（原为 0.25 秒轮询）。
+--      游戏重置 WalkSpeed 后能在下一帧立刻压回去，不再出现"改了没效果 / 时快时慢"。
+--   3. 两项都没锁定时 Heartbeat 里直接 return，零性能开销。
 getgenv().SutureMoveCfg = getgenv().SutureMoveCfg or {}
-if getgenv().SutureMoveCfg.WalkSpeed == nil then getgenv().SutureMoveCfg.WalkSpeed = origWalkSpeed end
-if getgenv().SutureMoveCfg.JumpPower == nil then getgenv().SutureMoveCfg.JumpPower = origJumpPower end
-if getgenv().SutureMoveCfg.AutoLock == nil then getgenv().SutureMoveCfg.AutoLock = false end
-
 local MoveCfg = getgenv().SutureMoveCfg
+if MoveCfg.WalkSpeed == nil then MoveCfg.WalkSpeed = origWalkSpeed end
+if MoveCfg.JumpPower == nil then MoveCfg.JumpPower = origJumpPower end
+if MoveCfg.WalkLock == nil then MoveCfg.WalkLock = false end
+if MoveCfg.JumpLock == nil then MoveCfg.JumpLock = false end
+-- 兼容旧存档：旧字段 AutoLock 表示速度+跳跃一起锁
+if MoveCfg.AutoLock == true then
+    MoveCfg.WalkLock = true
+    MoveCfg.JumpLock = true
+end
+
+-- 记录脚本自己加的隐形 ForceField（跳跃过高防摔死用），跳回安全值时要能移除
+local ownForceField = nil
 
 local function applyMovementToHumanoid(h)
     if not h or not h.Parent then return end
-    if MoveCfg.AutoLock then
+
+    -- 速度：只受 WalkLock 控制
+    if MoveCfg.WalkLock then
         if h.WalkSpeed ~= MoveCfg.WalkSpeed then
             h.WalkSpeed = MoveCfg.WalkSpeed
         end
-        if not h.UseJumpPower then
-            h.UseJumpPower = true
-        end
+    end
+
+    -- 跳跃：只受 JumpLock 控制（不再被速度滑块连带触发）
+    if MoveCfg.JumpLock then
+        -- 注意：不再【每帧】强制 UseJumpPower = true。
+        -- 若游戏本身用 JumpHeight 模式（把 UseJumpPower 设回 false），
+        -- 每帧抢改会形成属性拉锯，同样表现为人物上下抖动。
+        -- 现在只在用户拖动跳跃滑块时切换一次（见 UI 回调）。
         if h.JumpPower ~= MoveCfg.JumpPower then
             h.JumpPower = MoveCfg.JumpPower
         end
-        -- 跳跃高度过高时落地会摔死，自动挂隐形保护罩（只加不删，避免误删游戏自带的）
-        if h.JumpPower > 120 and h.Parent then
-            pcall(function()
-                if not h.Parent:FindFirstChildOfClass("ForceField") then
+        -- 跳跃高度过高时落地会摔死，自动挂隐形保护罩
+        if MoveCfg.JumpPower > 120 then
+            if not ownForceField or not ownForceField.Parent then
+                pcall(function()
                     local ff = Instance.new("ForceField")
                     ff.Visible = false
                     ff.Parent = h.Parent
-                end
+                    ownForceField = ff
+                end)
+            end
+        elseif ownForceField and ownForceField.Parent then
+            -- 跳跃调回安全值：移除脚本自己加的那个护罩，避免一直无敌
+            pcall(function()
+                ownForceField:Destroy()
             end)
+            ownForceField = nil
         end
     end
 end
@@ -76,22 +108,35 @@ local function applyMovement()
     end
 end
 
+-- 每帧锁定（原为 0.25 秒轮询，太慢，游戏一重置速度就会被拉回）
 getgenv().SutureMoveToken = (getgenv().SutureMoveToken or 0) + 1
 local MoveToken = getgenv().SutureMoveToken
-
--- 循环保留，但 AutoLock = false 时什么都不做（零干扰）
-task.spawn(function()
-    while getgenv().SutureMoveToken == MoveToken do
-        applyMovement()
-        task.wait(0.25)
+if getgenv().SutureMoveConn then
+    pcall(function() getgenv().SutureMoveConn:Disconnect() end)
+end
+local moveConn = RunService.Heartbeat:Connect(function()
+    if getgenv().SutureMoveToken ~= MoveToken then
+        pcall(function() moveConn:Disconnect() end)
+        getgenv().SutureMoveConn = nil
+        return
+    end
+    if not (MoveCfg.WalkLock or MoveCfg.JumpLock) then return end  -- 没锁定：直接跳过
+    local h = getHum()
+    if h then
+        applyMovementToHumanoid(h)
     end
 end)
+getgenv().SutureMoveConn = moveConn
 
 lp.CharacterAdded:Connect(function(char)
     task.spawn(function()
         local h = char:WaitForChild("Humanoid", 8)
         if h then
             task.wait(0.2)
+            -- 重生后若跳跃锁定还开着，补一次模式切换（只切一次，不每帧抢改）
+            if MoveCfg.JumpLock then
+                pcall(function() h.UseJumpPower = true end)
+            end
             applyMovementToHumanoid(h)
         end
     end)
@@ -124,23 +169,21 @@ local function isGrounded()
 end
 
 local airJumpsUsed = 0
-local wasGrounded = true
 
 UIS.JumpRequest:Connect(function()
+    -- 【重要】未开启无限跳跃/空中跳跃时，完全不介入。
+    -- 原实现无条件执行，导致每次地面跳跃都会额外 ChangeState(Jumping) 一次，
+    -- 与原生跳跃重复触发 —— 部分游戏（自定义角色控制器 / R15 特殊 rig）会表现为
+    -- 人物上下抖动。其他脚本（Rb脚本中心、夜脚本源）都带这个开关判断。
+    if not (PlayerExtra.InfJump or (PlayerExtra.AirJumps or 0) > 0) then return end
+
     local h = getHum()
     local c = lp.Character
     local root = c and c:FindFirstChild("HumanoidRootPart")
     if not h or not root or h.Health <= 0 or h.SeatPart then return end
 
-    local grounded = isGrounded()
-
-    if grounded and not wasGrounded then
-        airJumpsUsed = 0
-    end
-    wasGrounded = grounded
-
-    if grounded then
-        h:ChangeState(Enum.HumanoidStateType.Jumping)
+    if isGrounded() then
+        -- 地面跳跃交给原生 Humanoid 处理，脚本不插手（只重置空中跳跃计数）
         airJumpsUsed = 0
         return
     end
@@ -171,13 +214,22 @@ local function setCharacterCollide(collide)
     end
 end
 
+-- 记录当前已应用的碰撞状态，避免每帧重复写属性
+local noclipApplied = nil
+
 RunService.Stepped:Connect(function()
-    if not PlayerExtra.Noclip then return end
+    if not PlayerExtra.Noclip then
+        noclipApplied = nil
+        return
+    end
     local c = lp.Character
     local h = c and c:FindFirstChildOfClass("Humanoid")
-    local root = c and c:FindFirstChild("HumanoidRootPart")
-    if not c or not h or not root then return end
+    if not c or not h then return
     local moving = h.MoveDirection.Magnitude > 0.5
+    -- 只在状态真正变化时切换碰撞（原来每帧都写一遍，
+    -- 玩家移动时 MoveDirection 在阈值附近抖动会导致碰撞状态反复切换）
+    if noclipApplied == moving then return end
+    noclipApplied = moving
     for _, part in ipairs(c:GetDescendants()) do
         if part:IsA("BasePart") then
             pcall(function()
@@ -185,11 +237,14 @@ RunService.Stepped:Connect(function()
             end)
         end
     end
-    -- 防止无碰撞时下沉穿地板摔死：移动中下落时把竖直速度清零
-    if moving and root.Velocity.Y < 0 then
-        local v = root.Velocity
-        root.Velocity = Vector3.new(v.X, 0, v.Z)
-    end
+    -- 【已移除】原实现在移动中每帧把竖直速度清零（root.Velocity.Y = 0）。
+    -- 那会与重力/地面吸附每帧对抗，表现为人物上下抖动 —— 主流写法
+    -- （Rb脚本中心、夜脚本源）都不碰速度，只改 CanCollide。
+end)
+
+-- 角色重生后重置碰撞状态标记
+lp.CharacterAdded:Connect(function()
+    noclipApplied = nil
 end)
 
 -- ============ 修改重力（0~10，0=无重力，10=正常） ============
@@ -282,24 +337,29 @@ local uiOk, uiErr = pcall(function()
 
     local walkSpeedSlider = moveSec:Slider({
         Title = "移动速度",
-        Desc = "修改并锁定 WalkSpeed，防止被游戏重置",
+        Desc = "修改并锁定 WalkSpeed，防止被游戏重置（不影响跳跃）",
         Step = 1,
         Value = { Min = 1, Max = 100, Default = MoveCfg.WalkSpeed or origWalkSpeed },
         Callback = function(v)
             MoveCfg.WalkSpeed = tonumber(v) or 16
-            MoveCfg.AutoLock = true   -- 用户主动调整后开始锁定
+            MoveCfg.WalkLock = true   -- 只锁速度，不动跳跃
             applyMovement()
         end
     })
 
     local jumpPowerSlider = moveSec:Slider({
         Title = "跳跃高度",
-        Desc = "修改并锁定 JumpPower，防止被游戏重置",
+        Desc = "修改并锁定 JumpPower，防止被游戏重置（不影响速度）",
         Step = 1,
         Value = { Min = 1, Max = 200, Default = MoveCfg.JumpPower or origJumpPower },
         Callback = function(v)
             MoveCfg.JumpPower = tonumber(v) or 50
-            MoveCfg.AutoLock = true   -- 用户主动调整后开始锁定
+            MoveCfg.JumpLock = true   -- 只锁跳跃，不动速度
+            -- 切到 JumpPower 模式（只切这一次，之后不再每帧抢改，避免与游戏拉锯抖动）
+            local h = getHum()
+            if h then
+                pcall(function() h.UseJumpPower = true end)
+            end
             applyMovement()
         end
     })
@@ -335,10 +395,25 @@ local uiOk, uiErr = pcall(function()
         Callback = function()
             MoveCfg.WalkSpeed = origWalkSpeed
             MoveCfg.JumpPower = origJumpPower
-            MoveCfg.AutoLock = false   -- 恢复初始后停止锁定，避免再次干扰
+            MoveCfg.WalkLock = false   -- 恢复初始后停止锁定，避免再次干扰
+            MoveCfg.JumpLock = false
             PlayerExtra.GravityLock = false
             PlayerExtra.Gravity = origGravity / 19.62
             workspace.Gravity = origGravity
+            -- 直接写回角色：锁定已关闭，applyMovement 此时不会做任何事，
+            -- 必须手动恢复一次，否则速度/跳跃还停在改过的值上
+            local h = getHum()
+            if h then
+                pcall(function()
+                    h.WalkSpeed = origWalkSpeed
+                    h.JumpPower = origJumpPower
+                end)
+            end
+            -- 移除脚本加的隐形护罩（跳回安全值不该继续无敌）
+            if ownForceField and ownForceField.Parent then
+                pcall(function() ownForceField:Destroy() end)
+            end
+            ownForceField = nil
             applyMovement()
             pcall(function()
                 walkSpeedSlider:Set(origWalkSpeed)
