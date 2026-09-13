@@ -1,15 +1,17 @@
 --[[
     坐标传送（独立版）by suif
     功能：
-      1. 段落实时显示玩家当前坐标（精确到小数点后两位）
-      2. 「实时刷新坐标」开关，默认关闭（关闭时坐标显示静止，复制/保存仍取实时值）
-      3. 复制当前坐标 / 保存当前坐标 / 自定义名称输入框
-         名称留空时自动命名：坐标01、坐标02、坐标03……
-      4. 可折叠的「已保存坐标」分组：刷新列表按钮 + 每条坐标带「传送」「删除」
+      1. 段落显示玩家坐标（X/Y/Z 各保留两位小数）
+      2. 「实时刷新坐标」开关，默认关闭
+         —— 关闭时显示区冻结，复制/保存取的仍是显示区那个值（所见即所得）
+      3. 复制当前坐标 / 保存当前坐标 / 输入框自定义名称
+         —— 名称留空自动命名：坐标01、坐标02、坐标03……
+            编号填补空缺（删了坐标02，下一个还是坐标02）
+      4. 可折叠的「已保存坐标」分组：刷新列表 + 每条坐标带「传送」「删除」
     依赖：WindUI-Boreal
       - 优先复用主脚本已加载的 getgenv().WindUI
-      - 没有则自己从 GitHub 拉取（可直接单独执行）
-    说明：核心逻辑导出到 getgenv().CoordTP，方便以后并入主脚本
+      - 没有则自己从 GitHub 拉取（可单独执行）
+    核心逻辑导出在 getgenv().CoordTP，方便以后并入主脚本
 ]]
 
 -- ==================== 加载 WindUI ====================
@@ -22,7 +24,7 @@ if not WindUI then
         WindUI = res
         getgenv().WindUI = WindUI
     else
-        warn("[坐标传送] WindUI 加载失败：", res)
+        warn("[坐标传送] WindUI 加载失败：" .. tostring(res))
         return
     end
 end
@@ -32,10 +34,11 @@ local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 local lp = Players.LocalPlayer
 
-local setClipboard = setclipboard or toclipboard or (syn and syn.setclipboard)
+local setClipboard = setclipboard or toclipboard
+    or (syn and syn.setclipboard)
     or (getgenv and getgenv().setclipboard)
 
--- ==================== 存储（会话内 + 可选文件持久化） ====================
+-- ==================== 存储 ====================
 local SAVE_FILE = "SutureCoordTP.json"
 
 local function loadSavesFromFile()
@@ -69,23 +72,13 @@ if type(Saves) ~= "table" then
 end
 
 -- ==================== 工具函数 ====================
-local function getRoot()
+local function getPos()
     local char = lp.Character
     if not char then return nil end
-    return char:FindFirstChild("HumanoidRootPart")
-end
-
-local function getPos()
-    local root = getRoot()
-    if root then
-        return root.Position
-    end
-    -- 兜底：用模型 pivot
-    local char = lp.Character
-    if char then
-        local ok, pivot = pcall(function() return char:GetPivot() end)
-        if ok and pivot then return pivot.Position end
-    end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if root then return root.Position end
+    local ok, pivot = pcall(function() return char:GetPivot() end)
+    if ok and pivot then return pivot.Position end
     return nil
 end
 
@@ -98,7 +91,11 @@ local function fmtEntry(e)
     return string.format("X: %.2f, Y: %.2f, Z: %.2f", e.x or 0, e.y or 0, e.z or 0)
 end
 
--- 自动命名：从 01 开始找第一个没有被占用的编号（填补空缺）
+local function trim(s)
+    return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+-- 自动命名：从 01 开始找第一个没被占用的编号（填补空缺）
 -- 例：已有 坐标01、坐标03（02 被删了）→ 下一个是 坐标02
 local function nextDefaultName()
     local used = {}
@@ -115,7 +112,6 @@ local function nextDefaultName()
     return string.format("坐标%02d", i)
 end
 
--- 通知（WindUI 全局 Notify）
 local function notify(title, content, icon)
     pcall(function()
         WindUI:Notify({
@@ -144,14 +140,13 @@ end
 -- ==================== 核心功能 ====================
 local Core = {}
 Core.Saves = Saves
--- 外显坐标：显示区当前显示的数值。复制/保存都取它（所见即所得），
--- 关闭实时刷新后外显冻结，复制/保存拿到的就是冻结住的那组坐标。
+-- 外显坐标：显示区当前显示的数值。复制/保存都取它（所见即所得）
 Core.displayedPos = nil
 
 -- 传送
 function Core.teleportTo(x, y, z)
     local char = lp.Character
-    local root = getRoot()
+    local root = char and char:FindFirstChild("HumanoidRootPart")
     if not char or not root then
         notify("传送失败", "角色不存在（可能正在重生）", "x")
         return false
@@ -166,7 +161,6 @@ function Core.teleportTo(x, y, z)
         end)
     end
     if ok then
-        -- 清掉惯性，避免传送后被甩走
         pcall(function()
             root.AssemblyLinearVelocity = Vector3.zero
         end)
@@ -184,7 +178,7 @@ function Core.saveCurrent(customName)
         notify("保存失败", "显示区还没有坐标，请先点「刷新一次」", "x")
         return false
     end
-    local name = tostring(customName or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    local name = trim(customName)
     if name == "" then
         name = nextDefaultName()
     end
@@ -218,7 +212,7 @@ end
 
 getgenv().CoordTP = Core
 
--- ==================== 创建界面 ====================
+-- ==================== 创建窗口 ====================
 local win = WindUI:CreateWindow({
     Title = "坐标传送",
     Icon = "map-pin",
@@ -234,41 +228,45 @@ local win = WindUI:CreateWindow({
 
 local tab = win:Tab({ Title = "坐标传送", Icon = "map-pin", Locked = false })
 
--- ---------- 分组1：当前坐标 ----------
-local mainSec = tab:Section({ Title = "当前坐标", Icon = "crosshair", Opened = true })
-
-local coordPara = mainSec:Paragraph({
-    Title = "玩家当前位置",
-    Desc = "X: --, Y: --, Z: --",
-})
-
--- 找到段落里显示 Desc 的那个 TextLabel（用初始文本精确匹配），用于实时更新
-local descLabel = nil
-do
-    local frame = coordPara.ParagraphFrame or coordPara.ElementFrame
-    if frame then
-        for _, d in ipairs(frame:GetDescendants()) do
-            if d:IsA("TextLabel") and d.Text == "X: --, Y: --, Z: --" then
-                descLabel = d
-                break
-            end
-        end
+-- 元素创建保护：某个元素创建失败只 warn，不影响其他元素
+local function safe(what, fn)
+    local ok, err = pcall(fn)
+    if not ok then
+        warn("[坐标传送] 创建「" .. tostring(what) .. "」失败：" .. tostring(err))
     end
+    return ok
 end
 
-local LiveRefresh = false
+-- ==================== 分组1：当前坐标 ====================
+local mainSec = tab:Section({ Title = "当前坐标", Icon = "crosshair", Opened = true })
 
 local PLACEHOLDER_TEXT = "X: --, Y: --, Z: --"
+local descLabel = nil
+local warnedNoLabel = false
+local LiveRefresh = false
 
--- 在段落内部找显示 Desc 的 TextLabel（首次没找到时刷新时会重试）
+-- 在整个界面树里找显示坐标的那个 TextLabel
+-- （不依赖 WindUI 内部结构，用占位文本 / "X: 数字" 这种独有格式匹配）
 local function findDescLabel()
-    local frame = coordPara.ParagraphFrame or coordPara.ElementFrame
-    if not frame then return nil end
-    for _, d in ipairs(frame:GetDescendants()) do
-        if d:IsA("TextLabel") then
-            if d.Text == PLACEHOLDER_TEXT or (d.Text and d.Text:find("X: ", 1, true)) then
-                return d
+    local roots = {}
+    local pg = lp:FindFirstChild("PlayerGui")
+    if pg then table.insert(roots, pg) end
+    pcall(function()
+        table.insert(roots, game:GetService("CoreGui"))
+    end)
+    for _, root in ipairs(roots) do
+        local ok, found = pcall(function()
+            for _, d in ipairs(root:GetDescendants()) do
+                if d:IsA("TextLabel") then
+                    local t = d.Text or ""
+                    if t == PLACEHOLDER_TEXT or t:match("^X: %-?%d") then
+                        return d
+                    end
+                end
             end
+        end)
+        if ok and found then
+            return found
         end
     end
     return nil
@@ -287,74 +285,108 @@ local function refreshDisplay()
     -- 更新外显值（复制/保存都取它）
     Core.displayedPos = p
     local text = fmtPos(p)
-    if not descLabel then
+    if not descLabel or not descLabel.Parent then
         descLabel = findDescLabel()
+        if not descLabel and not warnedNoLabel then
+            warnedNoLabel = true
+            warn("[坐标传送] 未能定位坐标显示控件，请把这条报错发给我")
+        end
     end
     if descLabel and descLabel.Parent then
-        descLabel.Text = text
-        return
-    end
-    -- 兜底：段落若支持 Set 就整体更新
-    if type(coordPara.Set) == "function" then
         pcall(function()
-            coordPara:Set({ Title = "玩家当前位置", Desc = text })
+            descLabel.Text = text
         end)
     end
 end
 
-mainSec:Toggle({
-    Title = "实时刷新坐标",
-    Desc = "开启后持续刷新上方坐标；关闭时坐标冻结，复制/保存取的仍是显示区那个值",
-    Type = "Checkbox",
-    Value = false,
-    Callback = function(state)
-        LiveRefresh = state and true or false
-        if LiveRefresh then
+safe("坐标显示段落", function()
+    mainSec:Paragraph({
+        Title = "玩家当前位置",
+        Desc = PLACEHOLDER_TEXT,
+    })
+end)
+
+safe("实时刷新开关", function()
+    mainSec:Toggle({
+        Title = "实时刷新坐标",
+        Desc = "开启后持续刷新上方坐标；关闭时坐标冻结，复制/保存取的仍是显示区那个值",
+        Type = "Checkbox",
+        Value = false,
+        Callback = function(state)
+            LiveRefresh = state and true or false
+            if LiveRefresh then
+                refreshDisplay()
+            end
+        end,
+    })
+end)
+
+safe("刷新一次按钮", function()
+    mainSec:Button({
+        Title = "刷新一次",
+        Desc = "把显示区更新为当前实际坐标",
+        Icon = "refresh-cw",
+        Callback = function()
             refreshDisplay()
-        end
-    end,
-})
+            notify("已刷新", fmtPos(Core.displayedPos), "check")
+        end,
+    })
+end)
 
-mainSec:Button({
-    Title = "刷新一次",
-    Desc = "把显示区更新为当前实际坐标",
-    Icon = "refresh-cw",
-    Callback = function()
-        refreshDisplay()
-        notify("已刷新", fmtPos(Core.displayedPos), "check")
-    end,
-})
+safe("复制坐标按钮", function()
+    mainSec:Button({
+        Title = "复制当前坐标",
+        Desc = "复制显示区上的坐标（外显数值）",
+        Icon = "copy",
+        Callback = function()
+            Core.copyCurrent()
+        end,
+    })
+end)
 
-mainSec:Button({
-    Title = "复制当前坐标",
-    Desc = "复制显示区上的坐标（外显数值）",
-    Icon = "copy",
-    Callback = function()
-        Core.copyCurrent()
-    end,
-})
-
--- 名称输入框（读取内部 TextBox 的实时文本）
+-- 名称输入框（不接收返回值：WindUI 元素方法返回的是 __type 字符串）
+local INPUT_PLACEHOLDER = "留空自动命名"
 local lastInputText = ""
-local nameInput = mainSec:Input({
-    Title = "坐标名称",
-    Desc = "留空自动命名：坐标01、坐标02、坐标03……",
-    Placeholder = "留空自动命名",
-    Callback = function(v)
-        lastInputText = tostring(v or "")
-    end,
-})
+
+safe("名称输入框", function()
+    mainSec:Input({
+        Title = "坐标名称",
+        Desc = "留空自动命名：坐标01、坐标02、坐标03……",
+        Placeholder = INPUT_PLACEHOLDER,
+        Callback = function(v)
+            lastInputText = tostring(v or "")
+        end,
+    })
+end)
+
+-- 按 PlaceholderText 定位这个输入框的 TextBox
+local function findNameBox()
+    local roots = {}
+    local pg = lp:FindFirstChild("PlayerGui")
+    if pg then table.insert(roots, pg) end
+    pcall(function()
+        table.insert(roots, game:GetService("CoreGui"))
+    end)
+    for _, root in ipairs(roots) do
+        local ok, found = pcall(function()
+            for _, d in ipairs(root:GetDescendants()) do
+                if d:IsA("TextBox") and d.PlaceholderText == INPUT_PLACEHOLDER then
+                    return d
+                end
+            end
+        end)
+        if ok and found then
+            return found
+        end
+    end
+    return nil
+end
 
 local function readInputText()
-    -- 优先直接读输入框内部的 TextBox（用户可能还没回车就点了保存）
-    local frame = nameInput.ElementFrame or nameInput.UIElements
-    if frame then
-        local ok, box = pcall(function()
-            return frame:FindFirstChildWhichIsA("TextBox", true)
-        end)
-        if ok and box and box.Text and box.Text ~= "" then
-            return tostring(box.Text)
-        end
+    -- 优先直接读输入框（用户可能还没回车就点了保存）
+    local box = findNameBox()
+    if box and box.Text and box.Text ~= "" then
+        return tostring(box.Text)
     end
     -- 兜底：用回调缓存的值
     return lastInputText
@@ -363,32 +395,35 @@ end
 -- 前置声明，供上方按钮回调引用
 local rebuildList
 
-mainSec:Button({
-    Title = "保存当前坐标",
-    Desc = "保存显示区上的坐标（外显数值）到下方列表",
-    Icon = "save",
-    Callback = function()
-        if Core.saveCurrent(readInputText()) then
-            if rebuildList then rebuildList() end
-        end
-    end,
-})
+safe("保存坐标按钮", function()
+    mainSec:Button({
+        Title = "保存当前坐标",
+        Desc = "保存显示区上的坐标（外显数值）到下方列表",
+        Icon = "save",
+        Callback = function()
+            if Core.saveCurrent(readInputText()) then
+                if rebuildList then rebuildList() end
+            end
+        end,
+    })
+end)
 
--- ---------- 分组2：已保存坐标（可折叠 = 收缩栏） ----------
+-- ==================== 分组2：已保存坐标（可折叠） ====================
 local listSec = tab:Section({ Title = "已保存坐标", Icon = "folder", Opened = false })
 
-listSec:Button({
-    Title = "刷新列表",
-    Desc = "重新加载保存的坐标列表",
-    Icon = "refresh-cw",
-    Callback = function()
-        if rebuildList then rebuildList() end
-        notify("列表已刷新", tostring(#Saves) .. " 个坐标", "check")
-    end,
-})
-
--- 列表元素缓存（刷新时销毁重建）
 local listElements = {}
+
+safe("刷新列表按钮", function()
+    listSec:Button({
+        Title = "刷新列表",
+        Desc = "重新加载保存的坐标列表",
+        Icon = "refresh-cw",
+        Callback = function()
+            if rebuildList then rebuildList() end
+            notify("列表已刷新", tostring(#Saves) .. " 个坐标", "check")
+        end,
+    })
+end)
 
 rebuildList = function()
     -- 清掉旧条目
@@ -398,42 +433,51 @@ rebuildList = function()
     listElements = {}
 
     if #Saves == 0 then
-        local empty = listSec:Paragraph({
-            Title = "暂无保存的坐标",
-            Desc = "在上方点「保存当前坐标」后，这里会显示",
-        })
-        table.insert(listElements, empty)
+        local empty
+        safe("空列表提示", function()
+            empty = listSec:Paragraph({
+                Title = "暂无保存的坐标",
+                Desc = "在上方点「保存当前坐标」后，这里会显示",
+            })
+        end)
+        if empty then
+            table.insert(listElements, empty)
+        end
         return
     end
 
-    for i, e in ipairs(Saves) do
-        local entry = e
+    for i, entry in ipairs(Saves) do
+        local item
         local idx = i
-        local item = listSec:Paragraph({
-            Title = tostring(entry.name or ("坐标" .. i)),
-            Desc = fmtEntry(entry),
-            Buttons = {
-                {
-                    Title = "传送",
-                    Icon = "target",
-                    Variant = "Primary",
-                    Callback = function()
-                        Core.teleportTo(entry.x, entry.y, entry.z)
-                    end,
+        safe("列表条目", function()
+            item = listSec:Paragraph({
+                Title = tostring(entry.name or ("坐标" .. idx)),
+                Desc = fmtEntry(entry),
+                Buttons = {
+                    {
+                        Title = "传送",
+                        Icon = "target",
+                        Variant = "Primary",
+                        Callback = function()
+                            Core.teleportTo(entry.x, entry.y, entry.z)
+                        end,
+                    },
+                    {
+                        Title = "删除",
+                        Icon = "trash",
+                        Callback = function()
+                            table.remove(Saves, idx)
+                            saveSavesToFile(Saves)
+                            notify("已删除", tostring(entry.name or ""), "x")
+                            rebuildList()
+                        end,
+                    },
                 },
-                {
-                    Title = "删除",
-                    Icon = "trash",
-                    Callback = function()
-                        table.remove(Saves, idx)
-                        saveSavesToFile(Saves)
-                        notify("已删除", tostring(entry.name or ""), "x")
-                        rebuildList()
-                    end,
-                },
-            },
-        })
-        table.insert(listElements, item)
+            })
+        end)
+        if item then
+            table.insert(listElements, item)
+        end
     end
 
     -- 让分组重新排版（不同版本方法名不同，做兜底）
@@ -446,11 +490,11 @@ rebuildList = function()
     end)
 end
 
--- 初始构建一次列表
+-- ==================== 初始化 ====================
 rebuildList()
 refreshDisplay()
 
--- ---------- 实时刷新循环（默认关闭，开启后每 0.1 秒刷新） ----------
+-- 实时刷新循环（默认关闭，开启后每 0.1 秒刷新）
 task.spawn(function()
     while true do
         task.wait(0.1)
@@ -460,4 +504,4 @@ task.spawn(function()
     end
 end)
 
-notify("坐标传送已加载", "右键 Shift 开关界面（默认）", "map-pin")
+notify("坐标传送已加载", "右键 Shift 开关界面", "map-pin")
