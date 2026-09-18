@@ -8,6 +8,9 @@
          —— 名称留空自动命名：坐标01、坐标02、坐标03……
             编号填补空缺（删了坐标02，下一个还是坐标02）
       4. 可折叠的「已保存坐标」分组：刷新列表 + 每条坐标带「传送」「删除」
+         —— 每条会显示是在哪个游戏保存的；子服务器里显示的是【主游戏名】，
+            并额外标注实际地点（子服务器名）。其他游戏保存的坐标会标 ⚠其他游戏
+         —— 英文游戏名自动翻成中文（离线词典即时翻译 + 联网翻译并缓存）
     依赖：WindUI-Boreal
       - 优先复用主脚本已加载的 getgenv().WindUI
       - 没有则自己从 GitHub 拉取（可单独执行）
@@ -69,6 +72,425 @@ local Saves = getgenv().SutureCoordSaves
 if type(Saves) ~= "table" then
     Saves = loadSavesFromFile() or {}
     getgenv().SutureCoordSaves = Saves
+end
+
+-- ==================== 游戏信息（主游戏名 / 子服务器识别） ====================
+-- 关键点：同一个「宇宙(universe)」下的子服务器其实是不同的 place，
+-- 它们的 game.GameId 完全相同，只有 game.PlaceId 不同。
+-- 所以用 GameId 查询拿到的是主游戏名（网站上那个体验名）——
+-- 即使在子服务器里也能拿到主服务器的名字。
+-- 而 PlaceId 查到的才是「子服务器自己的名字」（其他脚本普遍这么写，所以会串名）。
+local MarketplaceService = game:GetService("MarketplaceService")
+
+local GameInfo = getgenv().SutureGameInfo or {}
+GameInfo.gameId = game.GameId                                   -- 宇宙 ID（子服务器共用）
+GameInfo.placeId = game.PlaceId                                 -- 当前地点 ID（每个子服务器不同）
+GameInfo.jobId = game.JobId                                     -- 当前服务器实例
+GameInfo.name = GameInfo.name or nil                            -- 主游戏名
+GameInfo.placeName = GameInfo.placeName or nil                  -- 当前地点名（子服务器名）
+GameInfo.rootPlaceId = GameInfo.rootPlaceId or nil              -- 主地点 ID
+GameInfo.isSubPlace = GameInfo.isSubPlace or false              -- 当前是否在子服务器里
+GameInfo.resolved = GameInfo.resolved or false
+getgenv().SutureGameInfo = GameInfo
+
+local onGameInfoReady = nil   -- 名称解析完成后的回调（UI 建好后赋值）
+
+local function resolveGameInfo()
+    task.spawn(function()
+        -- 1) 用宇宙 ID 查主游戏名（子服务器与主服务器共用同一个 GameId）
+        if GameInfo.gameId and GameInfo.gameId > 0 then
+            local ok, info = pcall(function()
+                return MarketplaceService:GetProductInfo(GameInfo.gameId, Enum.InfoType.Game)
+            end)
+            if ok and type(info) == "table" then
+                GameInfo.name = info.Name
+                GameInfo.rootPlaceId = info.RootPlaceId
+            end
+        end
+
+        -- 2) 用地点 ID 查当前地点名（在子服务器里得到的就是子服务器名）
+        local ok2, info2 = pcall(function()
+            return MarketplaceService:GetProductInfo(GameInfo.placeId)
+        end)
+        if ok2 and type(info2) == "table" then
+            GameInfo.placeName = info2.Name
+        end
+
+        -- 3) 兜底：查不到就用 Studio 里的名字
+        if not GameInfo.name or GameInfo.name == "" then
+            GameInfo.name = game.Name
+        end
+        if not GameInfo.placeName or GameInfo.placeName == "" then
+            GameInfo.placeName = game.Name
+        end
+
+        -- 当前地点不是主地点 → 说明现在就在子服务器里
+        GameInfo.isSubPlace = (GameInfo.rootPlaceId ~= nil
+            and GameInfo.rootPlaceId > 0
+            and GameInfo.rootPlaceId ~= GameInfo.placeId)
+        GameInfo.resolved = true
+
+        -- 补全历史记录里缺名字的条目（只补同一游戏的）
+        local changed = false
+        for _, e in ipairs(Saves) do
+            if e.gameId == GameInfo.gameId then
+                if not e.gameName or e.gameName == "" then
+                    e.gameName = GameInfo.name
+                    changed = true
+                end
+                if not e.placeName or e.placeName == "" then
+                    e.placeName = GameInfo.placeName
+                    changed = true
+                end
+            end
+        end
+        if changed then
+            saveSavesToFile(Saves)
+        end
+
+        if onGameInfoReady then
+            pcall(onGameInfoReady)
+        end
+    end)
+end
+
+-- ==================== 游戏名中文化 ====================
+-- API 返回的是开发者填的原文（英文游戏就是英文名）。
+-- 三层处理：常用游戏精确表 → 本地词级词典（离线、瞬间）→ 联网翻译（结果缓存）
+local NAME_CACHE_FILE = "SutureGameNameCache.json"
+local AutoTranslate = true
+
+local NameCache = getgenv().SutureGameNameCache
+if type(NameCache) ~= "table" then
+    local ok, data = pcall(function()
+        if readfile and isfile and isfile(NAME_CACHE_FILE) then
+            local raw = readfile(NAME_CACHE_FILE)
+            if raw and raw ~= "" then
+                return HttpService:JSONDecode(raw)
+            end
+        end
+    end)
+    NameCache = (ok and type(data) == "table") and data or {}
+    getgenv().SutureGameNameCache = NameCache
+end
+
+local function saveNameCache()
+    pcall(function()
+        if writefile then
+            writefile(NAME_CACHE_FILE, HttpService:JSONEncode(NameCache))
+        end
+    end)
+end
+
+-- 是否已经包含中文（含中文就不用翻译）
+local function hasCJK(s)
+    s = tostring(s or "")
+    local ok, res = pcall(function()
+        for _, cp in utf8.codes(s) do
+            if cp >= 0x4E00 and cp <= 0x9FFF then
+                return true
+            end
+        end
+        return false
+    end)
+    if ok then return res end
+    return s:find("[\228-\233]") ~= nil
+end
+
+-- 常用游戏精确对照（热门游戏的中文名）
+local ExactDict = {
+    ["blox fruits"] = "海盗果实",
+    ["adopt me!"] = "领养我",
+    ["adopt me"] = "领养我",
+    ["tower defense simulator"] = "塔防模拟器",
+    ["natural disaster survival"] = "自然灾害生存",
+    ["murder mystery 2"] = "谋杀之谜2",
+    ["jailbreak"] = "越狱",
+    ["arsenal"] = "军火库",
+    ["piggy"] = "小猪",
+    ["doors"] = "门",
+    ["brookhaven"] = "布鲁克黑文",
+    ["brookhaven rp"] = "布鲁克黑文角色扮演",
+    ["meepcity"] = "米普城",
+    ["work at a pizza place"] = "披萨店打工",
+    ["royale high"] = "皇家高中",
+    ["da hood"] = "达胡德",
+    ["welcome to bloxburg"] = "欢迎来到方块堡",
+    ["bloxburg"] = "方块堡",
+    ["the strongest battlegrounds"] = "最强战场",
+    ["strongest battlegrounds"] = "最强战场",
+    ["combat warriors"] = "战斗勇士",
+    ["pet simulator x"] = "宠物模拟器X",
+    ["all star tower defense"] = "全明星塔防",
+    ["anime fighting simulator"] = "动漫格斗模拟器",
+    ["shindo life"] = "新道人生",
+    ["demon slayer"] = "鬼灭之刃",
+    ["slayer awakening"] = "鬼灭觉醒",
+    ["survive the killers"] = "逃离杀手",
+    ["survival the killers"] = "逃离杀手",
+    ["evade"] = "躲避",
+    ["flee the facility"] = "逃离设施",
+    ["tower of hell"] = "地狱塔",
+    ["speed run 4"] = "速通4",
+    ["epic minigames"] = "史诗小游戏",
+    ["flood escape 2"] = "洪水逃生2",
+    ["horrific housing"] = "恐怖房屋",
+    ["pls donate"] = "请打赏",
+    ["grow a garden"] = "种花园",
+    ["dress to impress"] = "惊艳穿搭",
+    ["steal a brainrot"] = "偷取脑腐",
+    ["bee swarm simulator"] = "养蜂模拟器",
+    ["mega easy obby"] = "超简单跑酷",
+    ["total roblox drama"] = "罗布乐思大乱斗",
+    ["creatures of sonaria"] = "索纳里亚生物",
+    ["blox fruit"] = "海盗果实",
+    ["mm2"] = "谋杀之谜2",
+}
+
+-- 短语词典（先长后短匹配，所以「tower defense」不会被拆成两个词）
+local PhraseDict = {
+    ["tower defense"] = "塔防",
+    ["tower defence"] = "塔防",
+    ["battle royale"] = "大逃杀",
+    ["pet simulator"] = "宠物模拟器",
+    ["natural disaster"] = "自然灾害",
+    ["racing game"] = "竞速游戏",
+    ["role play"] = "角色扮演",
+    ["open world"] = "开放世界",
+    ["first person"] = "第一人称",
+    ["third person"] = "第三人称",
+}
+
+-- 单词词典（离线即时翻译，覆盖面尽量广）
+local WordDict = {
+    ["the"] = "", ["a"] = "", ["an"] = "", ["of"] = "", ["and"] = "与",
+    ["simulator"] = "模拟器", ["sim"] = "模拟", ["tycoon"] = "大亨",
+    ["tower"] = "塔", ["defense"] = "防御", ["defence"] = "防御",
+    ["survival"] = "生存", ["survive"] = "生存", ["survivor"] = "幸存者",
+    ["blox"] = "方块", ["block"] = "方块", ["blocks"] = "方块", ["cube"] = "方块",
+    ["fruit"] = "果实", ["fruits"] = "果实", ["pet"] = "宠物", ["pets"] = "宠物",
+    ["obby"] = "跑酷", ["parkour"] = "跑酷", ["adventure"] = "冒险",
+    ["world"] = "世界", ["island"] = "岛屿", ["islands"] = "岛屿",
+    ["city"] = "城市", ["town"] = "小镇", ["village"] = "村庄",
+    ["battle"] = "战斗", ["fight"] = "格斗", ["fighting"] = "格斗",
+    ["war"] = "战争", ["wars"] = "战争", ["arena"] = "竞技场",
+    ["legend"] = "传奇", ["legends"] = "传奇", ["hero"] = "英雄", ["heroes"] = "英雄",
+    ["dragon"] = "龙", ["dragons"] = "龙", ["ninja"] = "忍者",
+    ["pirate"] = "海盗", ["pirates"] = "海盗",
+    ["zombie"] = "僵尸", ["zombies"] = "僵尸",
+    ["horror"] = "恐怖", ["scary"] = "恐怖", ["haunted"] = "闹鬼",
+    ["escape"] = "逃脱", ["runner"] = "跑者", ["run"] = "跑",
+    ["clicker"] = "点击器", ["idle"] = "放置", ["incremental"] = "放置",
+    ["sword"] = "剑", ["swords"] = "剑", ["gun"] = "枪", ["guns"] = "枪",
+    ["anime"] = "动漫", ["story"] = "物语", ["project"] = "计划",
+    ["new"] = "新", ["super"] = "超级", ["mega"] = "巨型",
+    ["ultra"] = "究极", ["mini"] = "迷你", ["my"] = "我的", ["me"] = "我",
+    ["attack"] = "攻击", ["attacks"] = "攻击", ["defend"] = "防御",
+    ["titan"] = "巨人", ["titans"] = "巨人", ["giant"] = "巨人",
+    ["king"] = "国王", ["kingdom"] = "王国", ["queen"] = "女王",
+    ["school"] = "学校", ["prison"] = "监狱", ["life"] = "生活",
+    ["roleplay"] = "角色扮演", ["rp"] = "角色扮演",
+    ["fishing"] = "钓鱼", ["mining"] = "挖矿", ["farm"] = "农场",
+    ["farming"] = "农场", ["restaurant"] = "餐厅", ["cafe"] = "咖啡馆",
+    ["hotel"] = "酒店", ["hospital"] = "医院", ["airport"] = "机场",
+    ["racing"] = "竞速", ["race"] = "竞速", ["car"] = "汽车", ["cars"] = "汽车",
+    ["speed"] = "速度", ["driving"] = "驾驶", ["train"] = "火车",
+    ["plane"] = "飞机", ["boat"] = "船", ["dog"] = "狗", ["cat"] = "猫",
+    ["animal"] = "动物", ["football"] = "足球", ["soccer"] = "足球",
+    ["basketball"] = "篮球", ["boxing"] = "拳击", ["strength"] = "力量",
+    ["power"] = "力量", ["magic"] = "魔法", ["wizard"] = "巫师",
+    ["demon"] = "恶魔", ["devil"] = "恶魔", ["angel"] = "天使",
+    ["god"] = "神", ["gods"] = "神", ["slayer"] = "杀手",
+    ["killer"] = "杀手", ["killers"] = "杀手", ["murder"] = "谋杀",
+    ["mystery"] = "之谜", ["backrooms"] = "后室", ["apocalypse"] = "末日",
+    ["disaster"] = "灾害", ["disasters"] = "灾害", ["natural"] = "自然",
+    ["earthquake"] = "地震", ["tornado"] = "龙卷风", ["volcano"] = "火山",
+    ["flood"] = "洪水", ["fire"] = "火焰", ["water"] = "水",
+    ["earth"] = "大地", ["wind"] = "风", ["ice"] = "冰", ["snow"] = "雪",
+    ["winter"] = "冬季", ["summer"] = "夏季", ["night"] = "夜晚",
+    ["day"] = "白天", ["dark"] = "黑暗", ["light"] = "光明",
+    ["shadow"] = "暗影", ["blood"] = "血", ["death"] = "死亡",
+    ["soul"] = "灵魂", ["spirit"] = "灵魂", ["ghost"] = "幽灵",
+    ["mansion"] = "豪宅", ["house"] = "房子", ["home"] = "家",
+    ["base"] = "基地", ["online"] = "线上", ["multiplayer"] = "多人",
+    ["official"] = "官方", ["beta"] = "测试版", ["test"] = "测试",
+    ["update"] = "更新", ["remake"] = "重制", ["classic"] = "经典",
+    ["original"] = "原版", ["old"] = "旧", ["first"] = "第一",
+    ["one"] = "一", ["two"] = "二", ["three"] = "三",
+    ["pizza"] = "披萨", ["food"] = "食物", ["cooking"] = "烹饪",
+    ["bakery"] = "烘焙", ["shop"] = "商店", ["store"] = "商店",
+    ["dress"] = "穿搭", ["impress"] = "惊艳", ["grow"] = "种植",
+    ["garden"] = "花园", ["bee"] = "蜜蜂", ["swarm"] = "蜂群",
+    ["steal"] = "偷取", ["brainrot"] = "脑腐", ["creatures"] = "生物",
+    ["total"] = "大乱斗", ["drama"] = "乱斗", ["easy"] = "简单",
+    ["hard"] = "困难", ["hell"] = "地狱", ["facility"] = "设施",
+}
+
+-- 本地词级翻译
+local function dictTranslate(name)
+    local s = tostring(name or "")
+    if s == "" or hasCJK(s) then return s end
+
+    local low = s:lower()
+    local exact = ExactDict[low]
+    if exact then return exact end
+
+    -- 先做短语替换（长的优先，避免被短词拆散）
+    local phrases = {}
+    for k in pairs(PhraseDict) do
+        table.insert(phrases, k)
+    end
+    table.sort(phrases, function(a, b) return #a > #b end)
+
+    local work = " " .. low .. " "
+    for _, k in ipairs(phrases) do
+        work = work:gsub(k, " " .. PhraseDict[k] .. " ")
+    end
+
+    -- 剩下的英文单词逐个查词
+    local out = {}
+    for token in work:gmatch("%S+") do
+        if token:find("[\128-\255]") then
+            table.insert(out, token)                       -- 已经是中文
+        else
+            local w = token:gsub("^[^%w']+", ""):gsub("[^%w']+$", "")
+            if w ~= "" then
+                local trans = WordDict[w]
+                if trans == nil then
+                    trans = w                               -- 词典没有就保留原文
+                end
+                if trans ~= "" then
+                    table.insert(out, trans)
+                end
+            end
+        end
+    end
+
+    local result = table.concat(out)
+    if result == "" then return s end
+    return result
+end
+
+-- 联网翻译（Google → MyMemory 兜底）
+local function requestTranslation(text)
+    local ok, res = pcall(function()
+        local url = "https://translate.googleapis.com/translate_a/single"
+            .. "?client=gtx&sl=auto&tl=zh-CN&dt=t&q=" .. HttpService:UrlEncode(text)
+        return game:HttpGet(url)
+    end)
+    if ok and type(res) == "string" and res ~= "" then
+        local ok2, data = pcall(function() return HttpService:JSONDecode(res) end)
+        if ok2 and type(data) == "table" and data[1] and data[1][1] then
+            local seg = data[1][1][1]
+            if type(seg) == "string" and seg ~= "" then
+                return seg
+            end
+        end
+    end
+
+    local ok3, res3 = pcall(function()
+        local url = "https://api.mymemory.translated.net/get?q="
+            .. HttpService:UrlEncode(text) .. "&langpair=en|zh-CN"
+        return game:HttpGet(url)
+    end)
+    if ok3 and type(res3) == "string" and res3 ~= "" then
+        local ok4, data2 = pcall(function() return HttpService:JSONDecode(res3) end)
+        if ok4 and type(data2) == "table" and data2.responseData then
+            local seg = data2.responseData.translatedText
+            if type(seg) == "string" and seg ~= "" then
+                return seg
+            end
+        end
+    end
+    return nil
+end
+
+local translating = {}     -- 正在翻译的名字（防重复请求）
+local failedNames = {}     -- 翻译失败的名字（不再反复重试）
+local onNameTranslated = nil
+
+-- 把一个名字转成中文显示：有缓存用缓存，没缓存先用词典顶着，同时后台联网翻译
+local function zhForName(raw)
+    raw = tostring(raw or "")
+    if raw == "" then return raw end
+    if hasCJK(raw) then return raw end                       -- 本来就是中文
+
+    local cached = NameCache[raw]
+    if type(cached) == "string" and cached ~= "" then
+        return cached
+    end
+
+    if AutoTranslate and not translating[raw] and not failedNames[raw] then
+        translating[raw] = true
+        task.spawn(function()
+            local result = requestTranslation(raw)
+            translating[raw] = nil
+            if result and result ~= "" and result ~= raw then
+                NameCache[raw] = result
+                saveNameCache()
+                if onNameTranslated then
+                    pcall(onNameTranslated)
+                end
+            else
+                failedNames[raw] = true
+            end
+        end)
+    end
+
+    return dictTranslate(raw)                                -- 先给个离线中文名
+end
+
+-- 生成「游戏：xxx」这一行的文字
+local function gameLabelFor(e)
+    local sameGame = (e.gameId == nil) or (e.gameId == GameInfo.gameId)
+
+    local gname = e.gameName
+    if (not gname or gname == "") and sameGame then
+        gname = GameInfo.name
+    end
+    if not gname or gname == "" then
+        gname = e.placeName
+    end
+    if not gname or gname == "" then
+        if e.gameId == nil then
+            gname = "未知（旧记录）"
+        elseif sameGame and not GameInfo.resolved then
+            gname = "识别中…"
+        else
+            gname = "未知游戏"
+        end
+    end
+
+    local tags = {}
+
+    -- 子服务器标记（只有同一游戏才能用当前宇宙的 rootPlaceId 判断）
+    local isSub = false
+    if sameGame and e.placeId then
+        if GameInfo.rootPlaceId and GameInfo.rootPlaceId > 0 then
+            isSub = (e.placeId ~= GameInfo.rootPlaceId)
+        elseif GameInfo.placeId and e.placeId ~= GameInfo.placeId then
+            isSub = true
+        end
+    end
+    if isSub then
+        if e.placeName and e.placeName ~= "" and e.placeName ~= gname then
+            table.insert(tags, "子服务器：" .. zhForName(e.placeName))
+        else
+            table.insert(tags, "子服务器")
+        end
+    end
+
+    -- 不是当前游戏保存的坐标，给个提醒
+    if not sameGame then
+        table.insert(tags, "⚠其他游戏")
+    end
+
+    local suffix = ""
+    if #tags > 0 then
+        suffix = "（" .. table.concat(tags, "，") .. "）"
+    end
+    -- 英文名转成中文显示：先给离线词典结果，联网翻译回来后自动刷新
+    return "游戏：" .. zhForName(gname) .. suffix
 end
 
 -- ==================== 工具函数 ====================
@@ -187,6 +609,12 @@ function Core.saveCurrent(customName)
         x = tonumber(string.format("%.2f", p.X)),
         y = tonumber(string.format("%.2f", p.Y)),
         z = tonumber(string.format("%.2f", p.Z)),
+        -- 记录是在哪个游戏/哪个子服务器保存的
+        gameId = GameInfo.gameId,
+        placeId = GameInfo.placeId,
+        gameName = GameInfo.name,
+        placeName = GameInfo.placeName,
+        savedAt = os.time(),
     })
     saveSavesToFile(Saves)
     notify("已保存", name .. "  " .. fmtPos(p), "check")
@@ -413,6 +841,19 @@ local listSec = tab:Section({ Title = "已保存坐标", Icon = "folder", Opened
 
 local listElements = {}
 
+safe("翻译开关", function()
+    listSec:Toggle({
+        Title = "英文游戏名翻译成中文",
+        Desc = "联网翻译一次并缓存；关掉就显示游戏原始名字",
+        Type = "Checkbox",
+        Value = true,
+        Callback = function(state)
+            AutoTranslate = state and true or false
+            if rebuildList then rebuildList() end
+        end,
+    })
+end)
+
 safe("刷新列表按钮", function()
     listSec:Button({
         Title = "刷新列表",
@@ -452,13 +893,21 @@ rebuildList = function()
         safe("列表条目", function()
             item = listSec:Paragraph({
                 Title = tostring(entry.name or ("坐标" .. idx)),
-                Desc = fmtEntry(entry),
+                Desc = fmtEntry(entry) .. "\n" .. gameLabelFor(entry),
                 Buttons = {
                     {
                         Title = "传送",
                         Icon = "target",
                         Variant = "Primary",
                         Callback = function()
+                            -- 其他游戏保存的坐标，传送前提醒一下
+                            if entry.gameId and GameInfo.gameId
+                                and entry.gameId ~= GameInfo.gameId then
+                                notify("注意",
+                                    "该坐标是在「" .. zhForName(entry.gameName or entry.placeName or "其他游戏")
+                                    .. "」保存的，位置可能对不上",
+                                    "triangle-alert")
+                            end
                             Core.teleportTo(entry.x, entry.y, entry.z)
                         end,
                     },
@@ -491,8 +940,20 @@ rebuildList = function()
 end
 
 -- ==================== 初始化 ====================
+-- 游戏名解析完成后：补上列表里的游戏名 + 顺手刷新一次显示
+onGameInfoReady = function()
+    rebuildList()
+    refreshDisplay()
+end
+
+-- 联网翻译拿到结果后：刷新列表把中文名显示出来
+onNameTranslated = function()
+    rebuildList()
+end
+
 rebuildList()
 refreshDisplay()
+resolveGameInfo()   -- 异步查询主游戏名（不阻塞界面）
 
 -- 实时刷新循环（默认关闭，开启后每 0.1 秒刷新）
 task.spawn(function()
