@@ -224,7 +224,7 @@ RunService.Stepped:Connect(function()
     end
     local c = lp.Character
     local h = c and c:FindFirstChildOfClass("Humanoid")
-    if not c or not h then return
+    if not c or not h then return end
     local moving = h.MoveDirection.Magnitude > 0.5
     -- 只在状态真正变化时切换碰撞（原来每帧都写一遍，
     -- 玩家移动时 MoveDirection 在阈值附近抖动会导致碰撞状态反复切换）
@@ -272,49 +272,96 @@ RunService.Heartbeat:Connect(function(step)
     end
 end)
 
--- ============ 无伤坠落（位移平滑方案：借鉴夜脚本方案2，兼容所有直接扣血游戏） ============
--- 原理：Heartbeat 每帧监测 Y 轴位移，下坠超过阈值时把下落速度限制到安全值，
---      避免高速落地触发坠落伤害。即使游戏不用 Humanoid.FallDamage 事件也能生效。
-local noFallConn = nil
-local function applyNoFallDamage(on)
-    local char = lp.Character
-    if not char then return end
-    if on then
-        -- 先断开旧连接（角色重生/切换角色后需重建）
-        if noFallConn then
-            pcall(function() noFallConn:Disconnect() end)
-            noFallConn = nil
-        end
-        local root = char:FindFirstChild("HumanoidRootPart")
-        if not root then return end
-        local lastY = root.Position.Y
-        noFallConn = game:GetService("RunService").Heartbeat:Connect(function()
-            if not noFallConn then return end
-            local c = lp.Character
-            local r = c and c:FindFirstChild("HumanoidRootPart")
-            if not c or not r or r ~= root then return end  -- 角色已换
-            if not c.Parent then return end
+-- ============ 无伤坠落（从源头不产生摔落伤害，不补血） ============
+-- 主流写法（BS-loves_you「防摔落机制」/ 夜脚本源 / Rb脚本中心）：
+--   下坠全程保持原速，只有在【离地 6 格内】且【下坠速度低于 -50】的最后一瞬间，
+--   才把竖直速度卸到 -20。游戏结算落地伤害时读到的冲击速度已经是安全值，
+--   所以压根不会产生摔落伤害 —— 不是事后补血，也不是本地假血。
+--   同时关掉 FallingDown 状态：摔落不会僵直倒地。
+-- 【旧版为什么不满意】旧版是"下坠超过 12 格就把速度压到 -10"，整段下坠都被拖慢，
+--   所以落地像飘下来一样。现在只在最后不到零点几秒卸力，下落手感跟原版一致。
+local NOFALL_RAY = 6          -- 离地多少格内开始卸力
+local NOFALL_DANGER = -50     -- 下坠速度低于这个值才算危险下坠
+local NOFALL_SAFE = -20       -- 卸到的安全落地速度
 
-            local cur = r.Position
-            -- 下坠超过阈值，把下落速度限制为 -10（安全落地速度，不触发坠落伤害）
-            local fallDist = lastY - cur.Y
-            if fallDist >= 12 then
-                local vel = r.AssemblyLinearVelocity
-                if vel.Y < -10 then
-                    r.AssemblyLinearVelocity = Vector3.new(vel.X, -10, vel.Z)
-                end
-            end
-            -- 上升时刷新安全高度参照
-            if cur.Y > lastY then
-                lastY = cur.Y
-            end
+local noFallConn = nil
+local noFallHum = nil
+local noFallRayParams = nil
+
+local function noFallStop()
+    if noFallConn then
+        pcall(function() noFallConn:Disconnect() end)
+        noFallConn = nil
+    end
+    if noFallHum then
+        -- 关掉功能时把状态还原
+        pcall(function()
+            noFallHum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
         end)
-    else
-        if noFallConn then
-            pcall(function() noFallConn:Disconnect() end)
-            noFallConn = nil
+        noFallHum = nil
+    end
+end
+
+local function noFallBuildParams(char)
+    if not noFallRayParams then
+        noFallRayParams = RaycastParams.new()
+        pcall(function()
+            noFallRayParams.FilterType = Enum.RaycastFilterType.Exclude
+        end)
+        if noFallRayParams.FilterType ~= Enum.RaycastFilterType.Exclude then
+            -- 老版本枚举名兜底
+            pcall(function()
+                noFallRayParams.FilterType = Enum.RaycastFilterType.Blacklist
+            end)
+        end
+        noFallRayParams.IgnoreWater = true
+    end
+    -- 排除自己（以及别的玩家，避免踩在别人头上提前刹车）
+    local exclude = { char }
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= lp and p.Character then
+            exclude[#exclude + 1] = p.Character
         end
     end
+    noFallRayParams.FilterDescendantsInstances = exclude
+end
+
+local function applyNoFallDamage(on)
+    -- 先断旧连接（角色重生/切换角色后要重建）
+    noFallStop()
+    if not on then return end
+
+    local char = lp.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not char or not hum or not root then return end
+
+    noFallHum = hum
+    -- 摔落不僵直倒地
+    pcall(function()
+        hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+    end)
+
+    noFallBuildParams(char)
+
+    local RS = game:GetService("RunService")
+    noFallConn = RS.Heartbeat:Connect(function()
+        local c = lp.Character
+        if not c or c ~= char or not c.Parent then return end
+        local h = c:FindFirstChildOfClass("Humanoid")
+        local r = c:FindFirstChild("HumanoidRootPart")
+        if not h or not r or h.Health <= 0 then return end
+
+        local vel = r.AssemblyLinearVelocity
+        if vel.Y > NOFALL_DANGER then return end        -- 下坠不够快：什么都不做（原速下落）
+
+        -- 往下打一条 6 格的射线，看离地面还有多远
+        local hit = workspace:Raycast(r.Position, Vector3.new(0, -NOFALL_RAY, 0), noFallRayParams)
+        if not hit then return end                      -- 还高：继续保持原速
+
+        -- 快落地了：把冲击速度卸掉（游戏结算到的就是这个速度，所以不产生摔落伤害）
+        r.AssemblyLinearVelocity = Vector3.new(vel.X, NOFALL_SAFE, vel.Z)
+    end)
 end
 
 -- 角色重生后自动补上开启中的无伤坠落
@@ -472,7 +519,7 @@ local uiOk, uiErr = pcall(function()
 
     moveSec:Toggle({
         Title = "无伤坠落",
-        Desc = "下坠速度受限，避免坠落伤害（位移监测方案）",
+        Desc = "下坠全程原速，离地 6 格内卸掉冲击速度 → 从源头不产生摔落伤害（不补血）",
         Type = "Checkbox",
         Value = PlayerExtra.NoFallDamage or false,
         Callback = function(s)
