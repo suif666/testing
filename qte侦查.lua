@@ -1,6 +1,9 @@
 --[[
-    方块故事(Block Tales) QTE 侦查 + 自动按工具【手机版 · 低占用版】
+    方块故事(Block Tales) QTE 侦查 + 自动按工具【手机版 · v3】
     ------------------------------------------------------------------
+    面板标题会显示版本号（当前：v3 · 09-19 11:30）——
+    如果你面板上没看到 "v3"，说明执行的是旧版，请重新导入本文件。
+
     全部操作都在屏幕上的小面板里点，不需要键盘。
     面板日志可以直接「复制日志」发给我。
 
@@ -28,6 +31,9 @@ local HeuristicPress = false     -- 启发式自动按
 local IncludeSystemUI = false    -- 是否连 Roblox 自身 UI(CoreGui) 一起抓
 local PressMethod = "auto"       -- "auto" / "firesignal" / "vim" / "mouse"
 local GUI_NAME = "QTE_Recon_Panel"
+local VERSION = "v3"                         -- ★ 面板标题会显示这个，用来确认你跑的是哪一版
+local BUILD = "09-19 11:30"
+local dead = false                           -- 点「停止」后置 true，所有循环退出
 local POLL_INTERVAL = 1.2        -- 慢速轮询间隔（秒）
 local LOG_RATE_PER_SEC = 6       -- 日志每秒最多几行
 
@@ -161,6 +167,26 @@ local function notify(title, text)
     end)
 end
 
+-- ==================== 清理上次执行残留的旧面板 ====================
+local function purgeOld()
+    local parents = { pg }
+    pcall(function() table.insert(parents, game:GetService("CoreGui")) end)
+    pcall(function() if gethui then table.insert(parents, gethui()) end end)
+    local n = 0
+    for _, p in ipairs(parents) do
+        local ok, kids = pcall(function() return p:GetChildren() end)
+        if ok then
+            for _, c in ipairs(kids) do
+                if c.Name == GUI_NAME then
+                    pcall(function() c:Destroy() end)
+                    n = n + 1
+                end
+            end
+        end
+    end
+    return n
+end
+
 -- ==================== 面板 GUI ====================
 local main, bubble, logBtnRemote, logBtnAuto, dumpAll
 
@@ -185,7 +211,7 @@ local function buildGui()
         if cam and cam.ViewportSize then vp = cam.ViewportSize end
     end)
     local panelW = math.clamp(math.floor(vp.X * 0.50), 280, 400)
-    local panelH = math.clamp(math.floor(vp.Y * 0.72), 220, 380)
+    local panelH = math.clamp(math.floor(vp.Y * 0.75), 230, 400)
 
     main = Instance.new("Frame")
     main.Name = "Main"
@@ -212,7 +238,7 @@ local function buildGui()
     titleText.Size = UDim2.new(1, -80, 1, 0)
     titleText.Position = UDim2.new(0, 10, 0, 0)
     titleText.BackgroundTransparency = 1
-    titleText.Text = "QTE 侦查（可拖动）"
+    titleText.Text = "QTE侦查 " .. VERSION .. " · " .. BUILD
     titleText.TextColor3 = Color3.fromRGB(230, 230, 240)
     titleText.TextSize = 14
     titleText.Font = Enum.Font.GothamBold
@@ -233,7 +259,7 @@ local function buildGui()
     Instance.new("UICorner", hideBtn).CornerRadius = UDim.new(0, 6)
 
     local logScroll = Instance.new("ScrollingFrame")
-    logScroll.Size = UDim2.new(1, -16, 1, -124)
+    logScroll.Size = UDim2.new(1, -16, 1, -166)
     logScroll.Position = UDim2.new(0, 8, 0, 38)
     logScroll.BackgroundColor3 = Color3.fromRGB(15, 15, 19)
     logScroll.BorderSizePixel = 0
@@ -258,8 +284,8 @@ local function buildGui()
     logLabel.Parent = logScroll
 
     local btnRow = Instance.new("Frame")
-    btnRow.Size = UDim2.new(1, -16, 0, 74)
-    btnRow.Position = UDim2.new(0, 8, 1, -82)
+    btnRow.Size = UDim2.new(1, -16, 0, 112)
+    btnRow.Position = UDim2.new(0, 8, 1, -120)
     btnRow.BackgroundTransparency = 1
     btnRow.Parent = main
     local list = Instance.new("UIListLayout", btnRow)
@@ -356,6 +382,14 @@ local function buildGui()
         addLine("按法切换为：" .. PressMethod)
     end)
 
+    mkBtn("停止", 62, Color3.fromRGB(130, 62, 62), function()
+        addLine("=== 已停止侦查（重新执行脚本可再启动）===", true)
+        dead = true
+        task.wait(0.2)
+        pcall(function() ourGui:Destroy() end)
+        notify("QTE侦查", "已停止，脚本已卸载")
+    end)
+
     bubble = Instance.new("TextButton")
     bubble.Size = UDim2.new(0, 46, 0, 46)
     bubble.Position = UDim2.new(1, -60, 0, 120)
@@ -433,6 +467,7 @@ end
 
 -- ==================== 判定一个元素值不值得报告 ====================
 local function consider(o, silent)
+    if dead then return end
     if not o:IsA("GuiObject") then return end
     if not o.Visible then return end
     if seen[o] then return end
@@ -457,9 +492,10 @@ end
 for _, r in ipairs(getRoots()) do
     pcall(function()
         r.DescendantAdded:Connect(function(o)
+            if dead then return end
             task.spawn(function()
                 pcall(function()
-                    if inSkipTree(o) then return end
+                    if dead or inSkipTree(o) then return end
                     consider(o)
                 end)
             end)
@@ -496,6 +532,7 @@ end
 
 -- ==================== 侦查3：记录「你点到了哪个 GUI」 ====================
 UIS.InputBegan:Connect(function(input)
+    if dead then return end
     if input.UserInputType ~= Enum.UserInputType.MouseButton1
         and input.UserInputType ~= Enum.UserInputType.Touch then return end
     local pos = input.Position
@@ -574,6 +611,7 @@ end)
 -- ==================== 侦查5：3D 世界里的 UI（BillboardGui/SurfaceGui） ====================
 pcall(function()
     workspace.DescendantAdded:Connect(function(o)
+        if dead then return end
         local cls = o.ClassName
         if cls == "BillboardGui" or cls == "SurfaceGui" then
             addLine("世界UI > " .. o:GetFullName())
@@ -665,7 +703,7 @@ end
 
 -- ==================== 启发式自动按 ====================
 heuristicTry = function(o)
-    if not HeuristicPress then return end
+    if dead or not HeuristicPress then return end
     if not o.Parent or not o.Visible then return end
     if not o:IsA("GuiButton") then return end
     local sz = o.AbsoluteSize
@@ -678,6 +716,7 @@ heuristicTry = function(o)
 end
 
 -- ==================== 启动 ====================
+local purged = purgeOld()
 local okGui, guiErr = pcall(buildGui)
 if not okGui then
     print("[QTE侦查] 面板创建失败：" .. tostring(guiErr))
@@ -685,7 +724,7 @@ end
 
 -- 慢速轮询（第一遍静默建档，不刷日志）
 task.spawn(function()
-    while true do
+    while not dead do
         pcall(slowScan)
         task.wait(POLL_INTERVAL)
     end
@@ -729,8 +768,11 @@ end
 
 task.spawn(function()
     task.wait(0.3)
+    addLine("====== QTE 侦查 " .. VERSION .. " (" .. BUILD .. ") 已启动 ======", true)
+    if purged > 0 then
+        addLine("已清理旧面板 " .. purged .. " 个（如果你之前看到两个面板，现在只剩一个）", true)
+    end
     pcall(selfCheck)
-    addLine("====== QTE 侦查已启动 ======", true)
     addLine("先点「清空」，手动做一次 QTE，再点「复制日志」发我", true)
 end)
 
