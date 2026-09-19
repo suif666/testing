@@ -9,8 +9,14 @@
             编号填补空缺（删了坐标02，下一个还是坐标02）
       4. 可折叠的「已保存坐标」分组：刷新列表 + 每条坐标带「传送」「删除」
          —— 每条会显示是在哪个游戏保存的；子服务器里显示的是【主游戏名】，
-            并额外标注实际地点（子服务器名）。其他游戏保存的坐标会标 ⚠其他游戏
+            并额外标注实际地点（子服务器名）
+         —— 非当前游戏保存的坐标：游戏名标红 + 后面加 [非此游戏]
          —— 英文游戏名自动翻成中文（离线词典即时翻译 + 联网翻译并缓存）
+         —— 「过滤非当前游戏坐标」开关：开启后列表只留当前游戏的坐标
+      5. 「手动传送」分组：直接输入坐标数值传送
+         —— 格式 123.5 456 78.9，不用写 X Y Z
+         —— 分隔符：空格 / 英文逗号 / 中文逗号（分号、全角空格也兼容）
+         —— 「填入当前坐标」可把当前坐标填进输入框再微调
     依赖：WindUI-Boreal
       - 优先复用主脚本已加载的 getgenv().WindUI
       - 没有则自己从 GitHub 拉取（可单独执行）
@@ -880,6 +886,120 @@ safe("保存坐标按钮", function()
             if Core.saveCurrent(readInputText()) then
                 if rebuildList then rebuildList() end
             end
+        end,
+    })
+end)
+
+-- ==================== 分组：手动传送（直接输入坐标数值） ====================
+local manualSec = tab:Section({ Title = "手动传送", Icon = "target", Opened = false })
+
+local MANUAL_PLACEHOLDER = "例如：123.5 456 78.9"
+local lastManualText = ""
+
+-- 解析手动输入：空格 / 英文逗号 / 中文逗号都能分隔
+-- 额外兼容：分号、顿号、全角空格、X/Y/Z 字母、X: 123 这种写法
+local function parseCoordInput(text)
+    local s = tostring(text or "")
+    s = s:gsub("，", ","):gsub("、", ","):gsub("；", ","):gsub("：", ":")
+    s = s:gsub("　", " ")                 -- 全角空格
+    s = s:gsub("[xXyYzZ]", "")            -- 写了 XYZ 也认（不写更省事）
+    s = s:gsub("[=:]", " ")               -- 兼容 X: 123 的写法
+    s = s:gsub("[,;%s]+", " ")            -- 逗号/分号/空格统一成空格
+
+    local nums = {}
+    for tok in s:gmatch("%S+") do
+        local v = tonumber(tok)
+        if not v then
+            return nil, "「" .. tostring(tok) .. "」不是数字"
+        end
+        nums[#nums + 1] = v
+    end
+    if #nums ~= 3 then
+        return nil, string.format("要 3 个数字（X Y Z），现在给了 %d 个", #nums)
+    end
+    return Vector3.new(nums[1], nums[2], nums[3])
+end
+
+safe("手动坐标输入框", function()
+    manualSec:Input({
+        Title = "坐标数值",
+        Desc = "直接写三个数字，例：123.5 456 78.9（空格 / 英文逗号 / 中文逗号都行，不用写 X Y Z）",
+        Placeholder = MANUAL_PLACEHOLDER,
+        Callback = function(v)
+            lastManualText = tostring(v or "")
+        end,
+    })
+end)
+
+-- 按 PlaceholderText 定位手动输入的 TextBox
+local function findManualBox()
+    local roots = {}
+    local pGui = lp:FindFirstChild("PlayerGui")
+    if pGui then table.insert(roots, pGui) end
+    pcall(function()
+        table.insert(roots, game:GetService("CoreGui"))
+    end)
+    pcall(function()
+        if gethui then table.insert(roots, gethui()) end
+    end)
+    for _, root in ipairs(roots) do
+        local ok, found = pcall(function()
+            for _, d in ipairs(root:GetDescendants()) do
+                if d:IsA("TextBox") and d.PlaceholderText == MANUAL_PLACEHOLDER then
+                    return d
+                end
+            end
+        end)
+        if ok and found then
+            return found
+        end
+    end
+    return nil
+end
+
+local function readManualText()
+    -- 优先直接读输入框（可能还没回车就点了传送）
+    local box = findManualBox()
+    if box and box.Text and box.Text ~= "" then
+        return tostring(box.Text)
+    end
+    return lastManualText
+end
+
+safe("手动传送按钮", function()
+    manualSec:Button({
+        Title = "传送到输入的坐标",
+        Desc = "按输入框里的数值传送",
+        Icon = "target",
+        Callback = function()
+            local pos, err = parseCoordInput(readManualText())
+            if not pos then
+                notify("坐标格式不对", tostring(err), "x")
+                return
+            end
+            Core.teleportTo(pos.X, pos.Y, pos.Z)
+        end,
+    })
+end)
+
+safe("填入当前坐标按钮", function()
+    manualSec:Button({
+        Title = "填入当前坐标",
+        Desc = "把显示区的坐标填进输入框，方便微调",
+        Icon = "copy",
+        Callback = function()
+            local p = Core.displayedPos
+            if not p then
+                notify("没有坐标", "请先点「刷新一次」", "x")
+                return
+            end
+            local text = string.format("%.2f %.2f %.2f", p.X, p.Y, p.Z)
+            lastManualText = text
+            local box = findManualBox()
+            if box then
+                pcall(function() box.Text = text end)
+            end
+            notify("已填入", text, "check")
         end,
     })
 end)
