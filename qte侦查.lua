@@ -1,28 +1,30 @@
 --[[
-    方块故事(Block Tales) QTE 完美攻击 · 改写版 v1
+    方块故事(Block Tales) QTE 完美攻击 · 改写版 v2
     ==================================================================
-    原理（基于你提供的 Cobalt 拦截日志解码）：
-      1. 你用道具时，客户端先发一个「动作请求」：
-           { K1 = { { "Dynamite", 目标, 总点数 } }, n = 1 }
-      2. QTE 长条走完，客户端再发一个「命中数上报」：
-           { K2 = { { 命中数 } }, n = 1 }      -- 0/1/2/3
-      3. 服务器按命中数结算：命中数 == 全部 → Success = true（完美）
+    v1 的 bug：把「结算包」的层数数错了，导致回合永远不结束 → 一直显示"学习中"。
+      我以为：{ K = { { Move = "..." } } }
+      实际是：{ K = { { { Move = "..." }, [3] = 敌人 } } }   ← 多包了一层
+    v2 改成「深度搜索」：不管包几层，只要在里面找到特征就认得。
 
-    → 本脚本把「命中数上报」在发出的瞬间改写成「总点数」，
-      于是服务器永远认为是完美攻击。你不需要点 QTE。
+    ---------------------------------------------------------------
+    原理（基于 Cobalt 拦截日志解码）：
+      1. 你用道具 → 客户端发「动作请求」：{ K1 = { { "Dynamite", 目标, 总点数 } } }
+      2. QTE 走完 → 客户端发「命中数上报」：{ K2 = { { 命中数 } } }   -- 0/1/2/3
+      3. 服务器：命中数 = 满分 → Success = true（完美攻击）
+    → 本脚本在「命中数上报」发出的瞬间把它改成满分，你不用点 QTE。
 
-    安全性设计：
-      · 协议 key 每局随机（上一份日志是 V/6，这一份是 U/5）
-        → 脚本不写死任何 key，完全靠「形状识别 + 第一次动作时学习」
-      · 第 1 次动作只观察不定稿（用来确认哪个 key 是命中上报）
-      · 回合计数器（值会超过 4 的那个）会被自动排除，绝不改写
-      · 面板上可以随时关掉改写
+    ---------------------------------------------------------------
+    每局的协议 key 都随机（上一局 V/6，这一局 U/5），所以脚本不写死 key：
+      · 按「形状」识别，自动学习哪个 key 是命中上报
+      · 第 1 次动作只观察，从第 2 次开始改写
+      · 回合计数器（值会超过 4 的那个）自动排除，永不改写
+      · 学不到时可以点「手动key」自己指定
 
     用法：
-      1. 执行脚本 → 面板出现在左上角
-      2. 先用一次道具（随便打，中不中都行）→ 脚本学会命中上报的 key
-      3. 之后每次用道具，命中数都会被改写成满分
-      4. 想验证：点「导出文件」把日志发我
+      1. 执行 → 面板出现
+      2. 先用一次道具（中不中都行）→ 状态栏变成 命中key：[x]
+      3. 之后每次用道具都自动满分
+      4. 没效果就点「导出文件」把日志发我
 ]]
 
 local Players = game:GetService("Players")
@@ -32,31 +34,35 @@ local StarterGui = game:GetService("StarterGui")
 local lp = Players.LocalPlayer
 local pg = lp:WaitForChild("PlayerGui")
 
-local VERSION = "v1"
-local BUILD = "09-19 14:10"
+local VERSION = "v2"
+local BUILD = "09-19 14:40"
 local GUI_NAME = "QTE_Rewrite_Panel"
 
 -- ==================== 开关 ====================
-local RewriteOn = true          -- 改写总开关
-local RewriteMode = "total"     -- "total" = 改写成总点数（完美）/ "3" = 固定 3 / "off"
-local Verbose = true            -- 详细日志（记录每个发出的包）
+local RewriteOn = true
+local RewriteMode = "total"     -- total / 3 / off
+local ManualKey = nil           -- nil = 自动学习
+local Diagnose = false          -- 诊断模式：记录所有 FireServer 包
+local Verbose = true
 local dead = false
 local ExecName = "未知执行器"
-pcall(function()
-    if identifyexecutor then ExecName = identifyexecutor() end
-end)
+pcall(function() if identifyexecutor then ExecName = identifyexecutor() end end)
 
--- ==================== 学习状态 ====================
-local MoveKey = nil             -- 动作请求的 key
-local HitKey = nil              -- 命中上报的 key（学到后才开始改写）
-local CounterKeys = {}          -- 被判定为「回合计数器」的 key（值会 > 4）
-local keySeen = {}              -- key -> { 出现过的值 }
-local turn = { active = false, total = nil, move = nil, nums = {} }
+-- ==================== 状态 ====================
+local HitKey = nil
+local MoveKey = nil
+local CounterKeys = {}
+local keySeen = {}
+local numKeyOrder = {}
+local turn = { id = 0, active = false, total = nil, move = nil, nums = {} }
 local lastTotalNum = nil
-local stat = { moves = 0, resolves = 0, rewrites = 0, lastHit = "—", lastTotal = "—" }
+local stat = { fireSeen = 0, moves = 0, nums = 0, resolves = 0, rewrites = 0,
+               lastHit = "—", lastTotal = "—" }
+
+local function effKey() return ManualKey or HitKey end
 
 -- ==================== 日志 ====================
-local SHOW_WIDTH = 56
+local SHOW_WIDTH = 58
 local MAX_SHOW = 60
 local showLines, allLines = {}, {}
 local logDirty, logLabel = false, nil
@@ -66,7 +72,7 @@ local LOG_RATE = 12
 local function addLine(s, force)
     s = tostring(s)
     table.insert(allLines, s)
-    if #allLines > 4000 then table.remove(allLines, 1) end
+    if #allLines > 5000 then table.remove(allLines, 1) end
     local now = os.clock()
     if now - rateStart >= 1 then rateStart, rateCount = now, 0 end
     rateCount = rateCount + 1
@@ -79,40 +85,88 @@ end
 
 local function notify(title, text)
     pcall(function()
-        StarterGui:SetCore("SendNotification", {
-            Title = tostring(title), Text = tostring(text), Duration = 3,
-        })
+        StarterGui:SetCore("SendNotification",
+            { Title = tostring(title), Text = tostring(text), Duration = 3 })
     end)
 end
 
--- ==================== 包形状识别（认 key 不认名字） ====================
--- 返回 nil 或 { kind = "move"|"resolve"|"num", key = ..., ... }
+-- ==================== 深度识别（这才是 v2 的核心修复） ====================
+-- 返回 nil 或 { kind = "move"|"num"|"resolve", entry = 那个表, ... }
+local function classifyEntry(t)
+    if type(t) ~= "table" then return nil end
+    -- 结算元素：{ Move = "Slingshot", Damage = ..., Success = true }
+    if type(t.Move) == "string" then
+        return { kind = "resolve", entry = t, move = t.Move, success = t.Success == true }
+    end
+    -- 动作请求元素：{ "Slingshot", 目标Instance, 3 }
+    if type(t[1]) == "string" then
+        if type(t[2]) == "number" or typeof(t[2]) == "Instance" then
+            return { kind = "move", entry = t, move = t[1], target = t[2], total = t[3] }
+        end
+        return nil
+    end
+    -- 单个数字元素：{ 3 }
+    if type(t[1]) == "number" and t[2] == nil then
+        return { kind = "num", entry = t, val = t[1] }
+    end
+    return nil
+end
+
+local function deepFind(t, depth)
+    if type(t) ~= "table" or depth > 4 then return nil end
+    local r = classifyEntry(t)
+    if r then return r end
+    local n = #t
+    if n > 6 then n = 6 end
+    for i = 1, n do
+        local r2 = deepFind(t[i], depth + 1)
+        if r2 then return r2 end
+    end
+    return nil
+end
+
 local function shapeOf(payload)
     if type(payload) ~= "table" then return nil end
     for k, v in pairs(payload) do
-        if type(v) == "table" and type(v[1]) == "table" then
-            local e = v[1]
-            if type(e.Move) == "string" then
-                -- 结算包：{ { Move = "...", Damage = ..., Success = true } }
-                return { kind = "resolve", key = k, move = e.Move }
-            elseif type(e[1]) == "string" then
-                -- 动作请求：{ { "Dynamite", 目标, 总点数 } }
-                return { kind = "move", key = k, move = e[1], target = e[2], total = e[3] }
-            elseif type(e[1]) == "number" then
-                -- 单个数字：{ { 3 } }  ← 命中上报 / 回合计数器 都是这个形状
-                return { kind = "num", key = k, val = e[1] }
-            end
+        if type(v) == "table" then
+            local r = deepFind(v, 0)
+            if r then r.key = k; return r end
         end
     end
     return nil
 end
 
+local function briefShape(payload, depth)
+    depth = depth or 0
+    if depth > 3 then return "…" end
+    if type(payload) ~= "table" then return type(payload) end
+    local parts = {}
+    local cnt = 0
+    for k, v in pairs(payload) do
+        cnt = cnt + 1
+        if cnt > 4 then table.insert(parts, "…"); break end
+        local kk = type(k) == "string" and ('["' .. k .. '"]') or tostring(k)
+        if type(v) == "table" then
+            table.insert(parts, kk .. "=" .. briefShape(v, depth + 1))
+        else
+            table.insert(parts, kk .. "=" .. tostring(v):sub(1, 14))
+        end
+    end
+    return "{" .. table.concat(parts, ",") .. "}"
+end
+
+-- ==================== key 记录 ====================
 local function noteKeyValue(key, val)
     keySeen[key] = keySeen[key] or {}
     table.insert(keySeen[key], val)
+    if not numKeyOrder[key] then
+        numKeyOrder[key] = true
+        table.insert(numKeyOrder, key)   -- 记录顺序（手动选择的循环用）
+    end
     if val > 4 and not CounterKeys[key] then
         CounterKeys[key] = true
-        addLine("排除 key [" .. tostring(key) .. "]：值 " .. tostring(val) .. " > 4，是回合计数器", true)
+        addLine("排除 key [" .. tostring(key) .. "]：值 " .. tostring(val)
+            .. " > 4，判定为回合计数器", true)
         if HitKey == key then
             HitKey = nil
             addLine("⚠ 命中上报 key 被推翻，重新学习", true)
@@ -120,51 +174,109 @@ local function noteKeyValue(key, val)
     end
 end
 
--- ==================== 处理一个待发送的包（可改写） ====================
+-- ==================== 学习（带兜底） ====================
+local function tryLearn(reason)
+    if HitKey then return end
+    -- 规则 1：本回合内、结算之前、最后一个数字包
+    local last = turn.nums[#turn.nums]
+    if last and not CounterKeys[last.key] then
+        HitKey = last.key
+        addLine(string.format("★ 学到命中上报 key=[%s]（本回合命中 %s，%s）→ 下次开始改写",
+            tostring(HitKey), tostring(last.val), reason), true)
+        task.spawn(function()
+            pcall(notify, "QTE改写", "已学会 key [" .. tostring(HitKey) .. "]，下次开始改写")
+        end)
+        return
+    end
+    -- 规则 2：全局只有一个「值从没超过 4」的数字 key，那它就是命中上报
+    local cands = {}
+    for k, vals in pairs(keySeen) do
+        if not CounterKeys[k] then
+            local ok = true
+            for _, v in ipairs(vals) do if v > 4 then ok = false break end end
+            if ok then table.insert(cands, k) end
+        end
+    end
+    if #cands == 1 then
+        HitKey = cands[1]
+        addLine(string.format("★ 兜底学到 key=[%s]（全局唯一候选，%s）→ 下次开始改写",
+            tostring(HitKey), reason), true)
+        task.spawn(function()
+            pcall(notify, "QTE改写", "已学会 key [" .. tostring(HitKey) .. "]")
+        end)
+    end
+end
+
+local function closeTurn(reason)
+    if not turn.active then return end
+    tryLearn(reason)
+    local last = turn.nums[#turn.nums]
+    if last then stat.lastHit = tostring(last.val) end
+    turn.active = false
+end
+
+-- ==================== 处理一个待发送的包 ====================
 local function process(args)
     local payload = args[1]
     local info = shapeOf(payload)
-    if not info then return false end
+    if not info then
+        if Diagnose then
+            addLine("未识别包 " .. briefShape(payload))
+        end
+        return false
+    end
 
     if info.kind == "move" then
         stat.moves = stat.moves + 1
         stat.lastTotal = tostring(info.total)
         MoveKey = info.key
         if type(info.total) == "number" then lastTotalNum = info.total end
-        turn = { active = true, total = info.total, move = info.move, nums = {} }
-        if Verbose then
-            addLine(string.format("动作 #%d  %s  总点数=%s  key=[%s]",
-                stat.moves, tostring(info.move), tostring(info.total), tostring(info.key)))
-        end
+        turn.id = turn.id + 1
+        local myId = turn.id
+        turn = { id = myId, active = true, total = info.total, move = info.move, nums = {} }
+        addLine(string.format("动作 #%d  %s  总点数=%s  请求key=[%s]",
+            stat.moves, tostring(info.move), tostring(info.total), tostring(info.key)), true)
+        -- 兜底：万一结算包一直没出现，12 秒后也强制结算学习一次
+        task.delay(12, function()
+            if turn.id == myId and turn.active then
+                addLine("（12 秒没等到结算包，强制结算学习）", true)
+                closeTurn("超时兜底")
+            end
+        end)
         return false
 
     elseif info.kind == "num" then
+        stat.nums = stat.nums + 1
         noteKeyValue(info.key, info.val)
         if turn.active then
             table.insert(turn.nums, { key = info.key, val = info.val })
         end
         if Verbose then
-            addLine(string.format("  数字包 key=[%s] 值=%s%s",
+            addLine(string.format("  数字包 key=[%s] 值=%s%s%s",
                 tostring(info.key), tostring(info.val),
-                turn.active and " (回合内)" or ""))
+                turn.active and " (回合内)" or "",
+                CounterKeys[info.key] and " (计数器)" or ""))
         end
-        -- ★ 改写：只有学到 HitKey 之后才动手
-        if RewriteOn and RewriteMode ~= "off" and HitKey and info.key == HitKey
+        local k = effKey()
+        if RewriteOn and RewriteMode ~= "off" and k and info.key == k
             and not CounterKeys[info.key] then
             local target
             if RewriteMode == "total" then
-                target = turn.active and turn.total or nil
-                if type(target) ~= "number" then target = lastTotalNum or 3 end
+                target = (turn.active and turn.total) or lastTotalNum or 3
             else
                 target = tonumber(RewriteMode) or 3
             end
+            if type(target) ~= "number" then target = 3 end
             if type(info.val) == "number" and info.val < target then
-                payload[info.key] = { { target } }
+                info.entry[1] = target          -- ★ 就地改写，形状不变
                 stat.rewrites = stat.rewrites + 1
                 stat.lastHit = tostring(target)
-                addLine(string.format("★ 改写命中数 %d → %d（第 %d 次）",
+                addLine(string.format("★★ 改写命中数 %d → %d（第 %d 次）",
                     info.val, target, stat.rewrites), true)
-                notify("QTE改写", string.format("命中数 %d → %d", info.val, target))
+                -- 通知放到新线程里（namecall 里不能 yield）
+                task.spawn(function()
+                    pcall(notify, "QTE改写", string.format("命中数 %d → %d", info.val, target))
+                end)
                 return true
             else
                 stat.lastHit = tostring(info.val)
@@ -174,54 +286,74 @@ local function process(args)
 
     elseif info.kind == "resolve" then
         stat.resolves = stat.resolves + 1
-        -- 只有「我们自己的动作」的结算才算本回合结束（敌人攻击的结算不打断）
+        -- 只有「我们自己的动作」结算才算本回合结束（敌人攻击不打断）
         local mine = (not turn.active) or turn.move == nil
             or info.move == turn.move or info.move == "BruhMiss"
-        if turn.active and mine then
-            local last = turn.nums[#turn.nums]
-            if last then
-                stat.lastHit = tostring(last.val)
-                if not HitKey then
-                    HitKey = last.key
-                    addLine(string.format("★ 学到命中上报 key=[%s]（本回合命中 %s）从下一次开始改写",
-                        tostring(HitKey), tostring(last.val)), true)
-                    notify("QTE改写", "已学会，下次开始改写")
-                end
-            end
-            turn.active = false
-        end
         if Verbose then
             addLine("  结算包 Move=" .. tostring(info.move)
-                .. (info.move == "BruhMiss" and "（打空）" or ""))
+                .. (info.success and " [完美]" or "")
+                .. (info.move == "BruhMiss" and " [打空]" or "")
+                .. (mine and "" or " [敌人的]"))
+        end
+        if turn.active and mine then
+            closeTurn("结算包到达")
         end
         return false
     end
     return false
 end
 
--- ==================== Hook FireServer ====================
-local hookOk, hookErr = pcall(function()
-    local mt = getrawmetatable(game)
-    local oldNamecall = mt.__namecall
-    setreadonly(mt, false)
-    mt.__namecall = newcclosure(function(self, ...)
-        local method = getnamecallmethod()
-        if method == "FireServer" and typeof(self) == "Instance" then
-            local args = { ... }
-            if args[1] ~= nil then
-                local ok, changed = pcall(process, args)
-                if ok and changed then
-                    return oldNamecall(self, table.unpack(args))
-                end
+-- ==================== Hook ====================
+local hookOk, hookErr, hookMode = false, nil, "无"
+local oldNamecall
+
+local function hookBody(self, ...)
+    stat.fireSeen = stat.fireSeen + 1
+    local method
+    pcall(function() method = getnamecallmethod() end)
+    if method == "FireServer" then
+        local args = { ... }
+        if args[1] ~= nil then
+            local ok, changed = pcall(process, args)
+            if not ok then
+                addLine("⚠ 处理包出错：" .. tostring(changed), true)
+            elseif changed then
+                return oldNamecall(self, table.unpack(args))
             end
         end
-        return oldNamecall(self, ...)
+    end
+    return oldNamecall(self, ...)
+end
+
+-- 方式 1：hookmetamethod（最稳）
+if not hookOk and hookmetamethod and newcclosure then
+    local ok, err = pcall(function()
+        oldNamecall = hookmetamethod(game, "__namecall", newcclosure(hookBody))
     end)
-    setreadonly(mt, true)
-end)
+    if ok and oldNamecall then
+        hookOk, hookMode = true, "hookmetamethod"
+    else
+        hookErr = err
+    end
+end
+-- 方式 2：getrawmetatable
+if not hookOk and getrawmetatable and setreadonly and newcclosure then
+    local ok, err = pcall(function()
+        local mt = getrawmetatable(game)
+        oldNamecall = mt.__namecall
+        setreadonly(mt, false)
+        mt.__namecall = newcclosure(hookBody)
+        setreadonly(mt, true)
+    end)
+    if ok and oldNamecall then
+        hookOk, hookMode = true, "getrawmetatable"
+    else
+        hookErr = err
+    end
+end
 
 -- ==================== 面板 ====================
-local main, bubble, logLabelRef, statusLabel, btnRewrite, btnMode
+local main, bubble, statusLabel, btnRewrite, btnMode, btnManual, btnDiag
 
 local function buildGui()
     local parent = pg
@@ -234,42 +366,23 @@ local function buildGui()
     end)
 
     local panelW = math.floor(math.max(280, math.min(400, math.min(vp.X * 0.55, vp.X - 24))))
-    local panelH = math.floor(math.max(200, math.min(320, math.min(vp.Y * 0.62, vp.Y - 56))))
+    local panelH = math.floor(math.max(230, math.min(360, math.min(vp.Y * 0.72, vp.Y - 56))))
 
-    local titleH = 30
-    local statusH = 62
-    local COLS, BTN_H, GAP = 4, 32, 6
-    local btnRows = 2
-    local btnAreaH = btnRows * BTN_H + (btnRows - 1) * GAP
+    local titleH, statusH = 30, 62
+    local COLS, ROWS, BTN_H, GAP = 4, 3, 32, 6
+    local btnAreaH = ROWS * BTN_H + (ROWS - 1) * GAP
     local logTop = titleH + statusH + 6
-    local logH = math.max(36, panelH - logTop - btnAreaH - 10)
+    local logH = math.max(30, panelH - logTop - btnAreaH - 10)
     local btnW = math.floor((panelW - 12 - (COLS - 1) * GAP) / COLS)
 
     local errs = {}
-    local function step(what, fn)
-        local ok, err = pcall(fn)
-        if not ok then
-            table.insert(errs, what .. ": " .. tostring(err))
-            print("[QTE改写] 创建失败 " .. what .. " -> " .. tostring(err))
-        end
-        return ok
-    end
 
-    local gui
-    step("ScreenGui", function()
-        gui = Instance.new("ScreenGui")
-        gui.Name = GUI_NAME
-        gui.ResetOnSpawn = false
-        gui.IgnoreGuiInset = true
-        gui.DisplayOrder = 9998
-        gui.Parent = parent
-    end)
-    if not gui then
-        gui = Instance.new("ScreenGui")
-        gui.Name = GUI_NAME
-        gui.ResetOnSpawn = false
-        gui.Parent = pg
-    end
+    local gui = Instance.new("ScreenGui")
+    gui.Name = GUI_NAME
+    gui.ResetOnSpawn = false
+    gui.IgnoreGuiInset = true
+    gui.DisplayOrder = 9998
+    gui.Parent = parent
 
     main = Instance.new("Frame")
     main.Name = "Main"
@@ -321,7 +434,7 @@ local function buildGui()
     logBox.BorderSizePixel = 0
     logBox.Parent = main
 
-    local linesFit = math.max(3, math.floor((logH - 6) / 14))
+    local linesFit = math.max(2, math.floor((logH - 6) / 14))
     logLabel = Instance.new("TextLabel")
     logLabel.Size = UDim2.new(1, -8, 0, 0)
     logLabel.Position = UDim2.new(0, 4, 0, 3)
@@ -352,7 +465,6 @@ local function buildGui()
         b.BorderSizePixel = 0
         b.Text = text
         b.TextColor3 = Color3.fromRGB(238, 248, 242)
-        b.TextSize = 13
         b.TextScaled = true
         b.Parent = btnRow
         local last = 0
@@ -376,31 +488,45 @@ local function buildGui()
         btnRewrite.BackgroundColor3 = RewriteOn
             and Color3.fromRGB(40, 110, 66) or Color3.fromRGB(80, 60, 60)
         addLine("改写开关：" .. (RewriteOn and "开" or "关"), true)
-        notify("QTE改写", RewriteOn and "改写已开启" or "改写已关闭")
     end)
 
     btnMode = mkBtn("模式:满分", Color3.fromRGB(52, 62, 56), function()
-        if RewriteMode == "total" then
-            RewriteMode = "3"
-        elseif RewriteMode == "3" then
-            RewriteMode = "off"
-        else
-            RewriteMode = "total"
-        end
+        if RewriteMode == "total" then RewriteMode = "3"
+        elseif RewriteMode == "3" then RewriteMode = "off"
+        else RewriteMode = "total" end
         btnMode.Text = "模式:" .. (RewriteMode == "total" and "满分"
             or (RewriteMode == "3" and "固定3" or "不改"))
-        addLine("改写模式：" .. RewriteMode, true)
+        addLine("改写模式：" .. btnMode.Text, true)
+    end)
+
+    btnManual = mkBtn("key:自动", Color3.fromRGB(90, 80, 50), function()
+        -- 循环：自动 → 每个观察到的数字 key → 自动
+        if #numKeyOrder == 0 then
+            addLine("还没观察到任何数字包，先做一次动作", true)
+            return
+        end
+        local cur = ManualKey
+        local idx = 0
+        if cur ~= nil then
+            for i, k in ipairs(numKeyOrder) do if k == cur then idx = i end end
+        end
+        if idx >= #numKeyOrder then
+            ManualKey = nil
+        else
+            ManualKey = numKeyOrder[idx + 1]
+        end
+        btnManual.Text = "key:" .. (ManualKey and ("[" .. tostring(ManualKey) .. "]") or "自动")
+        addLine("手动指定命中key = " .. btnManual.Text, true)
     end)
 
     mkBtn("重新学习", Color3.fromRGB(90, 80, 50), function()
-        HitKey = nil
-        MoveKey = nil
-        CounterKeys = {}
-        keySeen = {}
+        HitKey, MoveKey, ManualKey = nil, nil, nil
+        CounterKeys, keySeen, numKeyOrder = {}, {}, {}
         lastTotalNum = nil
-        turn = { active = false, total = nil, move = nil, nums = {} }
-        addLine("已清空学习结果，下一次动作重新学习", true)
-        notify("QTE改写", "已重置学习，请再做一次动作")
+        turn = { id = turn.id, active = false, total = nil, move = nil, nums = {} }
+        if btnManual then btnManual.Text = "key:自动" end
+        addLine("已清空学习结果，请再做一次动作", true)
+        notify("QTE改写", "已重置学习")
     end)
 
     mkBtn("清空日志", Color3.fromRGB(70, 70, 60), function()
@@ -409,10 +535,9 @@ local function buildGui()
     end)
 
     mkBtn("复制日志", Color3.fromRGB(46, 96, 130), function()
-        local text = table.concat(allLines, "\n")
         local fn = setclipboard or toclipboard
         if fn then
-            pcall(fn, text)
+            pcall(fn, table.concat(allLines, "\n"))
             addLine("已复制 " .. #allLines .. " 行", true)
             notify("QTE改写", "日志已复制")
         else
@@ -422,15 +547,22 @@ local function buildGui()
 
     mkBtn("导出文件", Color3.fromRGB(46, 110, 90), function()
         local name = "QTE改写日志_" .. tostring(os.date("%m%d_%H%M%S")) .. ".txt"
-        local text = "执行器：" .. ExecName .. "\n版本：" .. VERSION .. " " .. BUILD
-            .. "\n学到 HitKey=" .. tostring(HitKey) .. " MoveKey=" .. tostring(MoveKey)
-            .. "\n改写次数=" .. stat.rewrites .. "\n----\n" .. table.concat(allLines, "\n")
+        local head = string.format(
+            "执行器：%s\n版本：%s %s\nHook：%s (%s)\n学到 HitKey=%s  MoveKey=%s  手动=%s\n计数器=%s\n统计：拦包%d 动作%d 数字%d 结算%d 改写%d\n----\n",
+            ExecName, VERSION, BUILD, hookOk and "已装" or "失败", hookMode,
+            tostring(HitKey), tostring(MoveKey), tostring(ManualKey),
+            (function()
+                local t = {}
+                for k in pairs(CounterKeys) do table.insert(t, tostring(k)) end
+                return table.concat(t, ",")
+            end)(),
+            stat.fireSeen, stat.moves, stat.nums, stat.resolves, stat.rewrites)
         local fn = writefile or (syn and syn.writefile)
         if not fn then
             addLine("❌ 没有 writefile，请用「复制日志」", true)
             return
         end
-        local ok, err = pcall(fn, name, text)
+        local ok, err = pcall(fn, name, head .. table.concat(allLines, "\n"))
         if ok then
             addLine("✅ 已导出：" .. name, true)
             local ok2, ws = pcall(function() return getworkspace and getworkspace() end)
@@ -441,16 +573,11 @@ local function buildGui()
         end
     end)
 
-    bubble = Instance.new("TextButton")
-    bubble.Size = UDim2.new(0, 46, 0, 46)
-    bubble.Position = UDim2.new(1, -60, 0, 180)
-    bubble.BackgroundColor3 = Color3.fromRGB(40, 110, 66)
-    bubble.BorderSizePixel = 0
-    bubble.Text = "QTE"
-    bubble.TextColor3 = Color3.fromRGB(240, 255, 245)
-    bubble.TextSize = 13
-    bubble.Visible = false
-    bubble.Parent = gui
+    btnDiag = mkBtn("诊断:关", Color3.fromRGB(52, 62, 56), function()
+        Diagnose = not Diagnose
+        btnDiag.Text = Diagnose and "诊断:开" or "诊断:关"
+        addLine("诊断模式：" .. (Diagnose and "开（记录所有包）" or "关"), true)
+    end)
 
     mkBtn("隐藏", Color3.fromRGB(52, 62, 56), function()
         main.Visible = false
@@ -465,23 +592,30 @@ local function buildGui()
         notify("QTE改写", "已停止")
     end)
 
-    local function tap(b)
+    bubble = Instance.new("TextButton")
+    bubble.Size = UDim2.new(0, 46, 0, 46)
+    bubble.Position = UDim2.new(1, -60, 0, 180)
+    bubble.BackgroundColor3 = Color3.fromRGB(40, 110, 66)
+    bubble.BorderSizePixel = 0
+    bubble.Text = "QTE"
+    bubble.TextColor3 = Color3.fromRGB(240, 255, 245)
+    bubble.TextScaled = true
+    bubble.Visible = false
+    bubble.Parent = gui
+    do
         local last = 0
         local function fire()
             local now = os.clock()
             if now - last < 0.25 then return end
             last = now
-            if b == bubble then
-                main.Visible = true
-                bubble.Visible = false
-            end
+            main.Visible = true
+            bubble.Visible = false
         end
-        pcall(function() b.Activated:Connect(fire) end)
-        pcall(function() b.MouseButton1Click:Connect(fire) end)
+        pcall(function() bubble.Activated:Connect(fire) end)
+        pcall(function() bubble.MouseButton1Click:Connect(fire) end)
     end
-    tap(bubble)
 
-    -- 拖动：全局 InputChanged，手指移出标题栏也跟手
+    -- 拖动
     local dragging, dragStart, startPos = false, nil, nil
     local function beginDrag(input)
         if input.UserInputType ~= Enum.UserInputType.MouseButton1
@@ -498,18 +632,15 @@ local function buildGui()
         if i.UserInputType ~= Enum.UserInputType.MouseMovement
             and i.UserInputType ~= Enum.UserInputType.Touch then return end
         local d = i.Position - dragStart
-        main.Position = UDim2.new(
-            startPos.X.Scale, startPos.X.Offset + d.X,
+        main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X,
             startPos.Y.Scale, startPos.Y.Offset + d.Y)
     end)
     UIS.InputEnded:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.MouseButton1
-            or i.UserInputType == Enum.UserInputType.Touch then
-            dragging = false
-        end
+            or i.UserInputType == Enum.UserInputType.Touch then dragging = false end
     end)
 
-    -- 状态 + 日志刷新
+    -- 刷新
     task.spawn(function()
         while not dead do
             task.wait(0.4)
@@ -523,14 +654,20 @@ local function buildGui()
                 end)
             end
             if statusLabel then
+                local counters = {}
+                for k in pairs(CounterKeys) do table.insert(counters, tostring(k)) end
                 pcall(function()
                     statusLabel.Text = string.format(
-                        "改写：%s（模式 %s）   Hook：%s\n学到命中key：%s   总点数：%s   最近命中：%s\n动作 %d 次 · 结算 %d 次 · ★改写 %d 次",
-                        RewriteOn and "开" or "关", RewriteMode,
-                        hookOk and "已装" or "失败",
-                        HitKey and ("[" .. tostring(HitKey) .. "]") or "学习中（先做一次动作）",
+                        "改写:%s(%s)  Hook:%s 拦包%d  诊断:%s\n命中key:%s  总点数:%s  最近命中:%s\n动作%d 数字%d 结算%d ★改写%d  计数器[%s]",
+                        RewriteOn and "开" or "关",
+                        RewriteMode == "total" and "满分" or (RewriteMode == "3" and "固定3" or "不改"),
+                        hookOk and hookMode or "失败",
+                        stat.fireSeen, Diagnose and "开" or "关",
+                        ManualKey and ("手动[" .. tostring(ManualKey) .. "]")
+                            or (HitKey and ("[" .. tostring(HitKey) .. "]") or "学习中"),
                         tostring(stat.lastTotal), tostring(stat.lastHit),
-                        stat.moves, stat.resolves, stat.rewrites)
+                        stat.moves, stat.nums, stat.resolves, stat.rewrites,
+                        table.concat(counters, ","))
                 end)
             end
         end
@@ -547,7 +684,6 @@ local function buildGui()
         banner.TextWrapped = true
         banner.ZIndex = 5
         banner.Parent = main
-        for _, e in ipairs(errs) do addLine("创建失败 > " .. e, true) end
     end
 end
 
@@ -563,15 +699,14 @@ pcall(function()
 end)
 
 local okGui, guiErr = pcall(buildGui)
-if not okGui then
-    print("[QTE改写] 面板创建失败：" .. tostring(guiErr))
-end
+if not okGui then print("[QTE改写] 面板创建失败：" .. tostring(guiErr)) end
 
 if not hookOk then
-    addLine("⚠ Hook 安装失败：" .. tostring(hookErr) .. "（脚本无法改写）", true)
+    addLine("⚠ Hook 安装失败：" .. tostring(hookErr), true)
+    addLine("   本脚本依赖 __namecall，没有 hook 就无法改写", true)
+else
+    addLine("Hook 已装（" .. hookMode .. "）", true)
 end
-
 addLine("====== QTE改写 " .. VERSION .. " (" .. BUILD .. ") 已启动 ======", true)
-addLine("先用一次道具（中不中都行），脚本会学会命中上报的 key", true)
-addLine("从第 2 次开始自动改写成满分", true)
-notify("QTE改写已启动", "先做一次动作让它学习")
+addLine("先用一次道具（中不中都行）→ 学会命中key → 第 2 次起自动满分", true)
+notify("QTE改写已启动", "先用一次道具让它学习")
