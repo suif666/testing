@@ -97,14 +97,43 @@ local onGameInfoReady = nil   -- 名称解析完成后的回调（UI 建好后�
 
 local function resolveGameInfo()
     task.spawn(function()
+        -- 0) 永远记下 Roblox 客户端自己认的名字（诊断用）
+        GameInfo.rawName = tostring(game.Name or "")
+
         -- 1) 用宇宙 ID 查主游戏名（子服务器与主服务器共用同一个 GameId）
         if GameInfo.gameId and GameInfo.gameId > 0 then
-            local ok, info = pcall(function()
-                return MarketplaceService:GetProductInfo(GameInfo.gameId, Enum.InfoType.Game)
+            -- 1a) 官方 games 接口（最可靠，返回的就是网站上那个体验名）
+            local okApi, apiName, apiRoot = pcall(function()
+                local url = "https://games.roblox.com/v1/games?universeIds="
+                    .. tostring(GameInfo.gameId)
+                local body = game:HttpGet(url)
+                if type(body) ~= "string" or body == "" then return nil end
+                local data = HttpService:JSONDecode(body)
+                local first = data and data.data and data.data[1]
+                if first then
+                    return first.name, first.rootPlaceId
+                end
+                return nil
             end)
-            if ok and type(info) == "table" then
-                GameInfo.name = info.Name
-                GameInfo.rootPlaceId = info.RootPlaceId
+            if okApi and type(apiName) == "string" and apiName ~= "" then
+                GameInfo.name = apiName
+                if type(apiRoot) == "number" and apiRoot > 0 then
+                    GameInfo.rootPlaceId = apiRoot
+                end
+            end
+
+            -- 1b) 接口不通就退回 GetProductInfo
+            if not GameInfo.name or GameInfo.name == "" then
+                local ok, info = pcall(function()
+                    return MarketplaceService:GetProductInfo(GameInfo.gameId, Enum.InfoType.Game)
+                end)
+                if ok and type(info) == "table" and type(info.Name) == "string"
+                    and info.Name ~= "" then
+                    GameInfo.name = info.Name
+                    if type(info.RootPlaceId) == "number" and info.RootPlaceId > 0 then
+                        GameInfo.rootPlaceId = info.RootPlaceId
+                    end
+                end
             end
         end
 
@@ -441,6 +470,18 @@ local function zhForName(raw)
 end
 
 -- 生成「游戏：xxx」这一行的文字
+-- 不是当前游戏保存的坐标 → 游戏名标红 + [非此游戏]
+local RICH_RED = "rgb(255, 85, 85)"
+
+-- 富文本转义（游戏名里可能有 & < >，不转义会破坏富文本）
+local function escRich(s)
+    s = tostring(s or "")
+    s = s:gsub("&", "&amp;")
+    s = s:gsub("<", "&lt;")
+    s = s:gsub(">", "&gt;")
+    return s
+end
+
 local function gameLabelFor(e)
     local sameGame = (e.gameId == nil) or (e.gameId == GameInfo.gameId)
 
@@ -480,20 +521,36 @@ local function gameLabelFor(e)
         end
     end
 
-    -- 不是当前游戏保存的坐标，给个提醒
-    if not sameGame then
-        table.insert(tags, "⚠其他游戏")
-    end
-
     local suffix = ""
     if #tags > 0 then
         suffix = "（" .. table.concat(tags, "，") .. "）"
     end
+
     -- 英文名转成中文显示：先给离线词典结果，联网翻译回来后自动刷新
-    return "游戏：" .. zhForName(gname) .. suffix
+    local shown = escRich(zhForName(gname))
+
+    -- 不是当前游戏保存的坐标 → 游戏名红色 + [非此游戏]
+    if not sameGame then
+        return "游戏：<font color=\"" .. RICH_RED .. "\">" .. shown .. "</font>"
+            .. " <font color=\"" .. RICH_RED .. "\">[非此游戏]</font>" .. suffix
+    end
+
+    return "游戏：" .. shown .. suffix
 end
 
 -- ==================== 工具函数 ====================
+-- 游戏识别诊断（排查「游戏名显示不对」用）
+local function diagText()
+    return string.format(
+        "客户端名：%s\n接口解析名：%s\n翻译后显示：%s\nGameId：%s\nPlaceId：%s\nRootPlaceId：%s\n子服务器：%s",
+        tostring(GameInfo.rawName or "?"),
+        tostring(GameInfo.name or "（未取到）"),
+        tostring(zhForName(GameInfo.name or GameInfo.rawName or "")),
+        tostring(GameInfo.gameId), tostring(GameInfo.placeId),
+        tostring(GameInfo.rootPlaceId or "?"),
+        GameInfo.isSubPlace and "是" or "否")
+end
+
 local function getPos()
     local char = lp.Character
     if not char then return nil end
@@ -866,12 +923,51 @@ safe("刷新列表按钮", function()
     })
 end)
 
+safe("复制诊断按钮", function()
+    listSec:Button({
+        Title = "复制诊断",
+        Desc = "把「当前游戏识别」的内容复制到剪贴板（排查游戏名不对时用）",
+        Icon = "clipboard-copy",
+        Callback = function()
+            local lines = { diagText(), "", "已保存坐标：" }
+            for i, e in ipairs(Saves) do
+                table.insert(lines, string.format("%d) %s | gameId=%s placeId=%s gameName=%s placeName=%s",
+                    i, tostring(e.name), tostring(e.gameId), tostring(e.placeId),
+                    tostring(e.gameName), tostring(e.placeName)))
+            end
+            local text = table.concat(lines, "\n")
+            if setClipboard then
+                pcall(setClipboard, text)
+                notify("诊断已复制", "直接粘贴发给我就行", "copy")
+            else
+                notify("复制失败", "当前执行器没有 setclipboard", "x")
+            end
+        end,
+    })
+end)
+
 rebuildList = function()
     -- 清掉旧条目
     for _, el in ipairs(listElements) do
         destroyElement(el)
     end
     listElements = {}
+
+    -- 游戏识别诊断（每次都重建，保证最新）
+    safe("识别诊断", function()
+        local diag = listSec:Paragraph({
+            Title = "当前游戏识别（点「复制诊断」可发给我）",
+            Desc = diagText(),
+        })
+        if diag then
+            pcall(function()
+                local d = diag.ParagraphFrame and diag.ParagraphFrame.UIElements
+                    and diag.ParagraphFrame.UIElements.Desc
+                if d and d:IsA("TextLabel") then d.RichText = true end
+            end)
+            table.insert(listElements, diag)
+        end
+    end)
 
     if #Saves == 0 then
         local empty
@@ -925,6 +1021,12 @@ rebuildList = function()
             })
         end)
         if item then
+            -- 打开富文本，才能让「非此游戏」的游戏名显示成红色
+            pcall(function()
+                local ui = item.ParagraphFrame and item.ParagraphFrame.UIElements
+                local d = ui and ui.Desc
+                if d and d:IsA("TextLabel") then d.RichText = true end
+            end)
             table.insert(listElements, item)
         end
     end
