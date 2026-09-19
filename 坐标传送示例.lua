@@ -97,9 +97,6 @@ local onGameInfoReady = nil   -- 名称解析完成后的回调（UI 建好后�
 
 local function resolveGameInfo()
     task.spawn(function()
-        -- 0) 永远记下 Roblox 客户端自己认的名字（诊断用）
-        GameInfo.rawName = tostring(game.Name or "")
-
         -- 1) 用宇宙 ID 查主游戏名（子服务器与主服务器共用同一个 GameId）
         if GameInfo.gameId and GameInfo.gameId > 0 then
             -- 1a) 官方 games 接口（最可靠，返回的就是网站上那个体验名）
@@ -539,16 +536,10 @@ local function gameLabelFor(e)
 end
 
 -- ==================== 工具函数 ====================
--- 游戏识别诊断（排查「游戏名显示不对」用）
-local function diagText()
-    return string.format(
-        "客户端名：%s\n接口解析名：%s\n翻译后显示：%s\nGameId：%s\nPlaceId：%s\nRootPlaceId：%s\n子服务器：%s",
-        tostring(GameInfo.rawName or "?"),
-        tostring(GameInfo.name or "（未取到）"),
-        tostring(zhForName(GameInfo.name or GameInfo.rawName or "")),
-        tostring(GameInfo.gameId), tostring(GameInfo.placeId),
-        tostring(GameInfo.rootPlaceId or "?"),
-        GameInfo.isSubPlace and "是" or "否")
+-- 这条坐标是不是「别的游戏」保存的（旧记录没有 gameId → 当成当前游戏）
+local function isOtherGame(e)
+    if not e or not e.gameId or not GameInfo.gameId then return false end
+    return e.gameId ~= GameInfo.gameId
 end
 
 local function getPos()
@@ -898,6 +889,9 @@ local listSec = tab:Section({ Title = "已保存坐标", Icon = "folder", Opened
 
 local listElements = {}
 
+-- 过滤非当前游戏坐标（开关一开，列表里只留当前游戏保存的坐标）
+local FilterOtherGame = false
+
 safe("翻译开关", function()
     listSec:Toggle({
         Title = "英文游戏名翻译成中文",
@@ -923,24 +917,19 @@ safe("刷新列表按钮", function()
     })
 end)
 
-safe("复制诊断按钮", function()
-    listSec:Button({
-        Title = "复制诊断",
-        Desc = "把「当前游戏识别」的内容复制到剪贴板（排查游戏名不对时用）",
-        Icon = "clipboard-copy",
-        Callback = function()
-            local lines = { diagText(), "", "已保存坐标：" }
-            for i, e in ipairs(Saves) do
-                table.insert(lines, string.format("%d) %s | gameId=%s placeId=%s gameName=%s placeName=%s",
-                    i, tostring(e.name), tostring(e.gameId), tostring(e.placeId),
-                    tostring(e.gameName), tostring(e.placeName)))
-            end
-            local text = table.concat(lines, "\n")
-            if setClipboard then
-                pcall(setClipboard, text)
-                notify("诊断已复制", "直接粘贴发给我就行", "copy")
+safe("过滤开关", function()
+    listSec:Toggle({
+        Title = "过滤非当前游戏坐标",
+        Desc = "开启后隐藏所有非当前游戏保存的坐标，直到关闭这个开关",
+        Type = "Checkbox",
+        Value = false,
+        Callback = function(state)
+            FilterOtherGame = state and true or false
+            if rebuildList then rebuildList() end
+            if FilterOtherGame then
+                notify("已开启过滤", "只显示当前游戏保存的坐标", "filter")
             else
-                notify("复制失败", "当前执行器没有 setclipboard", "x")
+                notify("已关闭过滤", "显示全部坐标", "filter")
             end
         end,
     })
@@ -952,22 +941,6 @@ rebuildList = function()
         destroyElement(el)
     end
     listElements = {}
-
-    -- 游戏识别诊断（每次都重建，保证最新）
-    safe("识别诊断", function()
-        local diag = listSec:Paragraph({
-            Title = "当前游戏识别（点「复制诊断」可发给我）",
-            Desc = diagText(),
-        })
-        if diag then
-            pcall(function()
-                local d = diag.ParagraphFrame and diag.ParagraphFrame.UIElements
-                    and diag.ParagraphFrame.UIElements.Desc
-                if d and d:IsA("TextLabel") then d.RichText = true end
-            end)
-            table.insert(listElements, diag)
-        end
-    end)
 
     if #Saves == 0 then
         local empty
@@ -983,9 +956,15 @@ rebuildList = function()
         return
     end
 
+    local hiddenCount = 0
+
     for i, entry in ipairs(Saves) do
         local item
         local idx = i
+        -- 过滤：开启后跳过所有非当前游戏的坐标
+        if FilterOtherGame and isOtherGame(entry) then
+            hiddenCount = hiddenCount + 1
+        else
         safe("列表条目", function()
             item = listSec:Paragraph({
                 Title = tostring(entry.name or ("坐标" .. idx)),
@@ -997,8 +976,7 @@ rebuildList = function()
                         Variant = "Primary",
                         Callback = function()
                             -- 其他游戏保存的坐标，传送前提醒一下
-                            if entry.gameId and GameInfo.gameId
-                                and entry.gameId ~= GameInfo.gameId then
+                            if isOtherGame(entry) then
                                 notify("注意",
                                     "该坐标是在「" .. zhForName(entry.gameName or entry.placeName or "其他游戏")
                                     .. "」保存的，位置可能对不上",
@@ -1028,6 +1006,32 @@ rebuildList = function()
                 if d and d:IsA("TextLabel") then d.RichText = true end
             end)
             table.insert(listElements, item)
+        end
+        end   -- /过滤判断
+    end
+
+    -- 过滤提示：告诉用户被藏起来了多少条
+    if hiddenCount > 0 then
+        local tip
+        safe("过滤提示", function()
+            tip = listSec:Paragraph({
+                Title = string.format("已隐藏 %d 个非当前游戏的坐标", hiddenCount),
+                Desc = "关掉上方「过滤非当前游戏坐标」开关即可重新显示",
+            })
+        end)
+        if tip then
+            table.insert(listElements, tip)
+        end
+    elseif FilterOtherGame and #Saves > 0 then
+        local tip
+        safe("过滤提示_无", function()
+            tip = listSec:Paragraph({
+                Title = "过滤已开启",
+                Desc = "当前保存的坐标都属于这个游戏",
+            })
+        end)
+        if tip then
+            table.insert(listElements, tip)
         end
     end
 
