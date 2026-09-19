@@ -378,6 +378,20 @@ lp.CharacterAdded:Connect(function(char)
     end)
 end)
 
+-- 加载时如果上次是开着的，直接补上
+-- （原来只有"重生"才会补，导致开关显示是 ON、功能却没在跑）
+if PlayerExtra.NoFallDamage then
+    task.spawn(function()
+        local char = lp.Character or lp.CharacterAdded:Wait()
+        char:WaitForChild("Humanoid", 8)
+        char:WaitForChild("HumanoidRootPart", 8)
+        task.wait(0.2)
+        if PlayerExtra.NoFallDamage then
+            applyNoFallDamage(true)
+        end
+    end)
+end
+
 -- ============ UI（折叠分组） ============
 local uiOk, uiErr = pcall(function()
     local moveSec = Tab:Section({ Title = "移动属性", Icon = "settings", Opened = true })
@@ -539,3 +553,8 @@ local uiOk, uiErr = pcall(function()
         end
     })
 end)
+
+-- UI 创建失败时给出提示（原来 uiOk/uiErr 声明了却没检查，UI 挂了是完全静默的）
+if not uiOk then
+    warn("[玩家类] UI 创建失败：" .. tostring(uiErr))
+end
