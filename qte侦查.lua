@@ -1,22 +1,18 @@
 --[[
-    方块故事(Block Tales) QTE 侦查 + 自动按工具【手机版】
+    方块故事(Block Tales) QTE 侦查 + 自动按工具【手机版 · 低占用版】
     ------------------------------------------------------------------
     全部操作都在屏幕上的小面板里点，不需要键盘。
-    日志直接显示在面板上，点「复制日志」就能复制全部内容发给我。
+    面板日志可以直接「复制日志」发给我。
+
+    ⚠ 性能说明（这一版专门优化过，上一版会卡）：
+      - 改用 DescendantAdded 事件监听新增元素（不再 0.1 秒全量遍历 GUI 树）
+      - 慢速轮询降到 1.2 秒一次，只扫非系统 ScreenGui，并让出主线程
+      - 日志限流（每秒最多 6 行）+ 面板只显示最近 60 行、过长截断
+      - 面板文字关闭自动换行（换行排版是手机上的卡顿来源）
+      - 剪贴板复制的是完整日志（不受面板显示限制）
 
     面板按钮：
-      打印GUI   = 立刻列出当前屏幕上所有可见 GUI（位置/大小/图片/文字）
-      Remote    = 开关「Remote 调用记录」，做 QTE 前点成"开"，做完点"关"
-      清空      = 清空日志和已记录列表，重新侦查
-      自动按    = 开关「启发式自动按」（新出现的小按钮自动点）
-      复制日志  = 把全部日志复制到剪贴板
-      隐藏      = 收起面板（变成右下角一个小圆点，再点展开）
-
-    用法：
-      1. 执行本脚本（单独跑，别和方块故事汉化脚本同时执行）
-      2. 面板出现在屏幕左上角，可以拖标题栏移动
-      3. 手动成功做一次 QTE（弹弓/炸药/自动剑）
-      4. 点「复制日志」，把内容发给我
+      打印GUI / Remote 开关 / 清空 / 自动按开关 / 复制日志 / Press 按法 / 隐藏
 ]]
 
 local Players = game:GetService("Players")
@@ -27,46 +23,71 @@ local lp = Players.LocalPlayer
 local pg = lp:WaitForChild("PlayerGui")
 
 -- ==================== 开关 ====================
-local HookRemoteLog = false      -- Remote 记录
+local HookRemoteLog = false      -- Remote 记录（默认关，很刷屏）
 local HeuristicPress = false     -- 启发式自动按
 local PressMethod = "auto"       -- "auto" / "firesignal" / "vim" / "mouse"
 local GUI_NAME = "QTE_Recon_Panel"
+local POLL_INTERVAL = 1.2        -- 慢速轮询间隔（秒）
+local LOG_RATE_PER_SEC = 6       -- 日志每秒最多几行
 
--- 前置声明：buildGui 里的按钮回调要用这些，必须先声明（否则会写成全局变量）
-local seen = {}
+-- 前置声明（面板按钮回调要用）
+local seen = setmetatable({}, { __mode = "k" })   -- 弱键：实例销毁后自动回收，不泄漏
 local remoteFilter = {}
 local remoteCount = {}
+local remoteCallCount = 0
 local heuristicTry
+local ourGui
 
--- ==================== 日志（屏幕显示 + 剪贴板） ====================
-local MAX_SHOW = 150             -- 面板上最多显示多少行
-local showLines = {}             -- 面板显示用
-local allLines = {}              -- 复制用（全量）
+-- 这些顶层 ScreenGui 直接跳过，不遍历（系统 UI 树很大，是卡顿主因之一）
+local ROOT_SKIP = {
+    [GUI_NAME] = true,
+    RobloxGui = true,
+    RobloxLoadingGui = true,
+    BubbleChat = true,
+    Chat = true,
+    PlayerList = true,
+    TopBar = true,
+    Topbar = true,
+    Notification = true,
+    WindUI = true,
+    CoordTP = true,
+}
+
+-- ==================== 日志 ====================
+local MAX_SHOW = 60              -- 面板最多显示多少行
+local SHOW_WIDTH = 54            -- 面板每行截断宽度
+local showLines = {}
+local allLines = {}              -- 剪贴板用（完整）
 local logDirty = false
-local logLabel, logScroll, logCopyHint
+local logLabel
+local rateCount, rateStart = 0, os.clock()
 
 local function addLine(s)
     s = tostring(s)
-    table.insert(showLines, s)
-    if #showLines > MAX_SHOW then
-        table.remove(showLines, 1)
-    end
     table.insert(allLines, s)
-    if #allLines > 5000 then
-        table.remove(allLines, 1)
+    if #allLines > 4000 then table.remove(allLines, 1) end
+
+    -- 限流：超了就只统计，不刷屏
+    local now = os.clock()
+    if now - rateStart >= 1 then
+        rateStart, rateCount = now, 0
     end
+    rateCount = rateCount + 1
+    if rateCount > LOG_RATE_PER_SEC then
+        if rateCount == LOG_RATE_PER_SEC + 1 then
+            table.insert(showLines, "...（日志太多，已限流）")
+            logDirty = true
+        end
+        return
+    end
+
+    table.insert(showLines, #s > SHOW_WIDTH and (s:sub(1, SHOW_WIDTH) .. "…") or s)
+    if #showLines > MAX_SHOW then table.remove(showLines, 1) end
     logDirty = true
     print("[QTE侦查] " .. s)
 end
 
 -- ==================== 小工具 ====================
-local function roots()
-    local t = { pg }
-    pcall(function() table.insert(t, game:GetService("CoreGui")) end)
-    pcall(function() if gethui then table.insert(t, gethui()) end end)
-    return t
-end
-
 local function pathOf(o, depth)
     local parts, cur, d = {}, o, 0
     while cur and d < (depth or 4) do
@@ -86,7 +107,7 @@ local function desc(o)
     local extra = {}
     if o:IsA("TextLabel") or o:IsA("TextButton") or o:IsA("TextBox") then
         local t = tostring(o.Text or "")
-        if t ~= "" then table.insert(extra, "文字=" .. t:sub(1, 28)) end
+        if t ~= "" then table.insert(extra, "文字=" .. t:sub(1, 24)) end
     end
     if o:IsA("ImageLabel") or o:IsA("ImageButton") then
         table.insert(extra, "图片=" .. tostring(o.Image))
@@ -96,14 +117,14 @@ local function desc(o)
         #extra > 0 and (" | " .. table.concat(extra, " ")) or "")
 end
 
--- 排除我们自己的面板和系统界面，避免刷屏
-local function isNoise(o)
-    local p = pathOf(o, 8)
-    if p:find(GUI_NAME, 1, true) then return true end
-    if p:find("QTE_Recon", 1, true) then return true end
-    if p:find("WindUI", 1, true) or p:find("CoordTP", 1, true) then return true end
-    if p:find("RobloxGui", 1, true) or p:find("PlayerList", 1, true)
-        or p:find("Chat", 1, true) then return true end
+-- 只在「新增元素」时用（只比父链名字，不拼字符串）
+local function inSkipTree(o)
+    local cur, d = o, 0
+    while cur and d < 6 do
+        if ROOT_SKIP[cur.Name] then return true end
+        cur = cur.Parent
+        d = d + 1
+    end
     return false
 end
 
@@ -116,7 +137,7 @@ local function notify(title, text)
 end
 
 -- ==================== 面板 GUI ====================
-local main, bubble, logBtnRemote, logBtnAuto
+local main, bubble, logBtnRemote, logBtnAuto, dumpAll
 
 local function buildGui()
     local parent = pg
@@ -131,8 +152,8 @@ local function buildGui()
     gui.DisplayOrder = 9999
     gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     gui.Parent = parent
+    ourGui = gui
 
-    -- 面板尺寸按实际屏幕算（手机小屏也能放下）
     local vp = Vector2.new(800, 400)
     pcall(function()
         local cam = workspace.CurrentCamera
@@ -141,7 +162,6 @@ local function buildGui()
     local panelW = math.clamp(math.floor(vp.X * 0.42), 250, 350)
     local panelH = math.clamp(math.floor(vp.Y * 0.62), 190, 330)
 
-    -- 主面板
     main = Instance.new("Frame")
     main.Name = "Main"
     main.Size = UDim2.new(0, panelW, 0, panelH)
@@ -150,14 +170,10 @@ local function buildGui()
     main.BackgroundTransparency = 0.08
     main.BorderSizePixel = 0
     main.Active = true
-    main.Draggable = false          -- 用下面的手动拖动（触摸更稳，避免双重移动）
+    main.Draggable = false
     main.Parent = gui
     Instance.new("UICorner", main).CornerRadius = UDim.new(0, 10)
-    local stroke = Instance.new("UIStroke", main)
-    stroke.Color = Color3.fromRGB(70, 70, 90)
-    stroke.Thickness = 1
 
-    -- 标题栏（拖动 + 隐藏按钮）
     local title = Instance.new("Frame")
     title.Name = "TitleBar"
     title.Size = UDim2.new(1, 0, 0, 32)
@@ -170,7 +186,7 @@ local function buildGui()
     titleText.Size = UDim2.new(1, -80, 1, 0)
     titleText.Position = UDim2.new(0, 10, 0, 0)
     titleText.BackgroundTransparency = 1
-    titleText.Text = "QTE 侦查面板（可拖动）"
+    titleText.Text = "QTE 侦查（可拖动）"
     titleText.TextColor3 = Color3.fromRGB(230, 230, 240)
     titleText.TextSize = 14
     titleText.Font = Enum.Font.GothamBold
@@ -189,20 +205,18 @@ local function buildGui()
     hideBtn.Parent = title
     Instance.new("UICorner", hideBtn).CornerRadius = UDim.new(0, 6)
 
-    -- 日志区
-    logScroll = Instance.new("ScrollingFrame")
+    local logScroll = Instance.new("ScrollingFrame")
     logScroll.Size = UDim2.new(1, -16, 1, -124)
     logScroll.Position = UDim2.new(0, 8, 0, 38)
     logScroll.BackgroundColor3 = Color3.fromRGB(15, 15, 19)
     logScroll.BorderSizePixel = 0
-    logScroll.ScrollBarThickness = 4
+    logScroll.ScrollBarThickness = 3
     logScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
     logScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
     logScroll.Parent = main
     Instance.new("UICorner", logScroll).CornerRadius = UDim.new(0, 8)
 
     logLabel = Instance.new("TextLabel")
-    logLabel.Name = "LogText"
     logLabel.Size = UDim2.new(1, -8, 0, 0)
     logLabel.Position = UDim2.new(0, 4, 0, 4)
     logLabel.BackgroundTransparency = 1
@@ -212,13 +226,11 @@ local function buildGui()
     logLabel.Font = Enum.Font.Code
     logLabel.TextXAlignment = Enum.TextXAlignment.Left
     logLabel.TextYAlignment = Enum.TextYAlignment.Top
-    logLabel.TextWrapped = true
+    logLabel.TextWrapped = false                 -- ★ 关掉自动换行（换行排版是卡顿来源）
     logLabel.AutomaticSize = Enum.AutomaticSize.Y
     logLabel.Parent = logScroll
 
-    -- 按钮行
     local btnRow = Instance.new("Frame")
-    btnRow.Name = "Buttons"
     btnRow.Size = UDim2.new(1, -16, 0, 74)
     btnRow.Position = UDim2.new(0, 8, 1, -82)
     btnRow.BackgroundTransparency = 1
@@ -227,37 +239,33 @@ local function buildGui()
     list.FillDirection = Enum.FillDirection.Horizontal
     list.Wrap = true
     list.Padding = UDim.new(0, 6)
-    list.SortOrder = Enum.SortOrder.LayoutOrder
 
-    local function mkBtn(text, order, w, h, color, onClick)
+    local function mkBtn(text, w, color, onClick)
         local b = Instance.new("TextButton")
-        b.Size = UDim2.new(0, w, 0, h or 32)
+        b.Size = UDim2.new(0, w, 0, 32)
         b.BackgroundColor3 = color or Color3.fromRGB(52, 52, 66)
         b.BorderSizePixel = 0
         b.Text = text
         b.TextColor3 = Color3.fromRGB(238, 238, 248)
         b.TextSize = 13
         b.Font = Enum.Font.GothamBold
-        b.LayoutOrder = order
         b.Parent = btnRow
         Instance.new("UICorner", b).CornerRadius = UDim.new(0, 7)
         b.MouseButton1Click:Connect(function()
             local ok, err = pcall(onClick)
-            if not ok then
-                addLine("按钮出错: " .. tostring(err))
-            end
+            if not ok then addLine("按钮出错: " .. tostring(err)) end
         end)
         return b
     end
 
-    mkBtn("打印GUI", 1, 84, 32, Color3.fromRGB(52, 84, 120), function()
+    mkBtn("打印GUI", 84, Color3.fromRGB(52, 84, 120), function()
         dumpAll()
         notify("QTE侦查", "已打印当前可见 GUI")
     end)
 
-    logBtnRemote = mkBtn("Remote:关", 2, 92, 32, Color3.fromRGB(60, 60, 78), function()
+    logBtnRemote = mkBtn("Remote:关", 92, Color3.fromRGB(60, 60, 78), function()
         HookRemoteLog = not HookRemoteLog
-        remoteFilter = {}
+        remoteFilter, remoteCount, remoteCallCount = {}, {}, 0
         logBtnRemote.Text = HookRemoteLog and "Remote:开" or "Remote:关"
         logBtnRemote.BackgroundColor3 = HookRemoteLog
             and Color3.fromRGB(46, 120, 70) or Color3.fromRGB(60, 60, 78)
@@ -266,37 +274,37 @@ local function buildGui()
         notify("QTE侦查", HookRemoteLog and "开始记录 Remote" or "已停止记录")
     end)
 
-    mkBtn("清空", 3, 60, 32, Color3.fromRGB(90, 70, 50), function()
+    mkBtn("清空", 60, Color3.fromRGB(90, 70, 50), function()
         showLines, allLines = {}, {}
-        seen, remoteFilter, remoteCount = {}, {}, {}
+        seen = setmetatable({}, { __mode = "k" })
+        remoteFilter, remoteCount, remoteCallCount = {}, {}, 0
         logDirty = true
-        addLine("=== 日志已清空 ===")
+        addLine("=== 已清空（现在去做一次 QTE）===")
         notify("QTE侦查", "日志已清空")
     end)
 
-    logBtnAuto = mkBtn("自动按:关", 4, 92, 32, Color3.fromRGB(60, 60, 78), function()
+    logBtnAuto = mkBtn("自动按:关", 92, Color3.fromRGB(60, 60, 78), function()
         HeuristicPress = not HeuristicPress
         logBtnAuto.Text = HeuristicPress and "自动按:开" or "自动按:关"
         logBtnAuto.BackgroundColor3 = HeuristicPress
             and Color3.fromRGB(46, 120, 70) or Color3.fromRGB(60, 60, 78)
         addLine(HeuristicPress and "=== 启发式自动按：开启 ===" or "=== 启发式自动按：关闭 ===")
-        notify("QTE侦查", HeuristicPress
-            and "自动按已开启（新出现的小按钮会自动点）" or "自动按已关闭")
+        notify("QTE侦查", HeuristicPress and "自动按已开启" or "自动按已关闭")
     end)
 
-    mkBtn("复制日志", 5, 92, 32, Color3.fromRGB(46, 96, 130), function()
+    mkBtn("复制日志", 92, Color3.fromRGB(46, 96, 130), function()
         local text = table.concat(allLines, "\n")
         local fn = setclipboard or toclipboard or (syn and syn.setclipboard)
         if fn then
             pcall(fn, text)
-            addLine("已复制 " .. #allLines .. " 行日志到剪贴板")
+            addLine("已复制 " .. #allLines .. " 行日志")
             notify("QTE侦查", "日志已复制，粘贴给我即可")
         else
             notify("QTE侦查", "这个执行器没有 setclipboard")
         end
     end)
 
-    local pressBtn = mkBtn("Press:auto", 6, 98, 32, Color3.new(0.35, 0.35, 0.45), function()
+    local pressBtn = mkBtn("Press:auto", 98, Color3.fromRGB(70, 70, 90), function()
         if PressMethod == "auto" then
             PressMethod = "firesignal"
         elseif PressMethod == "firesignal" then
@@ -310,9 +318,7 @@ local function buildGui()
         addLine("按法切换为：" .. PressMethod)
     end)
 
-    -- 收起后的小圆点
     bubble = Instance.new("TextButton")
-    bubble.Name = "Bubble"
     bubble.Size = UDim2.new(0, 46, 0, 46)
     bubble.Position = UDim2.new(1, -60, 0, 120)
     bubble.BackgroundColor3 = Color3.fromRGB(46, 96, 130)
@@ -334,7 +340,7 @@ local function buildGui()
         bubble.Visible = false
     end)
 
-    -- 拖动（触摸 + 鼠标都支持）
+    -- 拖动（触摸 + 鼠标）
     local dragging, dragStart, startPos = false, nil, nil
     local function beginDrag(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1
@@ -361,10 +367,10 @@ local function buildGui()
         end
     end)
 
-    -- 日志刷新（每 0.3 秒，避免频繁写 Text 卡顿）
+    -- 日志刷新：0.5 秒一次，只在有变化时写
     task.spawn(function()
         while true do
-            task.wait(0.3)
+            task.wait(0.5)
             if logDirty and logLabel then
                 logDirty = false
                 pcall(function()
@@ -375,43 +381,79 @@ local function buildGui()
     end)
 end
 
--- ==================== 侦查1：新出现的可见 GUI ====================
-function scanNew()
-    for _, r in ipairs(roots()) do
-        local ok, list = pcall(function() return r:GetDescendants() end)
+-- ==================== 判定一个元素值不值得报告 ====================
+local function consider(o, silent)
+    if not o:IsA("GuiObject") then return end
+    if not o.Visible then return end
+    if seen[o] then return end
+    seen[o] = true
+    if silent then return end                       -- 首次静默建档，不刷日志
+    if ourGui and o:IsDescendantOf(ourGui) then return end
+    addLine("发现 > " .. desc(o))
+    if HeuristicPress and heuristicTry then
+        task.spawn(function()
+            pcall(heuristicTry, o)
+        end)
+    end
+end
+
+-- ==================== 侦查1：事件监听新增元素 ====================
+local function getRoots()
+    local t = { pg }
+    pcall(function() table.insert(t, game:GetService("CoreGui")) end)
+    return t
+end
+
+for _, r in ipairs(getRoots()) do
+    pcall(function()
+        r.DescendantAdded:Connect(function(o)
+            task.spawn(function()
+                pcall(function()
+                    if inSkipTree(o) then return end
+                    consider(o)
+                end)
+            end)
+        end)
+    end)
+end
+
+-- ==================== 侦查2：慢速轮询（抓「由隐藏变显示」的元素） ====================
+local firstPass = true
+
+local function slowScan()
+    for _, r in ipairs(getRoots()) do
+        local ok, screens = pcall(function() return r:GetChildren() end)
         if ok then
-            for _, o in ipairs(list) do
-                if o:IsA("GuiObject") then
-                    if o.Visible and not isNoise(o) then
-                        if not seen[o] then
-                            seen[o] = true
-                            addLine("新显示 > " .. desc(o))
-                            if HeuristicPress and heuristicTry then
-                                task.spawn(function()
-                                    pcall(heuristicTry, o)
-                                end)
+            for _, sg in ipairs(screens) do
+                if sg:IsA("ScreenGui") and not ROOT_SKIP[sg.Name] then
+                    local enabled = true
+                    pcall(function() enabled = sg.Enabled end)
+                    if enabled then
+                        local ok2, list = pcall(function() return sg:GetDescendants() end)
+                        if ok2 then
+                            for _, o in ipairs(list) do
+                                pcall(consider, o, firstPass)
                             end
                         end
-                    elseif not o.Visible then
-                        seen[o] = nil
                     end
                 end
             end
         end
+        task.wait()                                  -- 让出主线程，避免卡帧
     end
+    firstPass = false
 end
 
--- ==================== 侦查2：记录「你点到了哪个 GUI」 ====================
--- 手机上你手指点中的 GUI 也会触发 InputBegan，这里能直接抓到目标
+-- ==================== 侦查3：记录「你点到了哪个 GUI」 ====================
 UIS.InputBegan:Connect(function(input)
     if input.UserInputType ~= Enum.UserInputType.MouseButton1
         and input.UserInputType ~= Enum.UserInputType.Touch then return end
     local pos = input.Position
-    for _, r in ipairs(roots()) do
+    for _, r in ipairs(getRoots()) do
         pcall(function()
             local objs = r:GetGuiObjectsAtPosition(pos.X, pos.Y)
             for _, o in ipairs(objs) do
-                if not isNoise(o) then
+                if not (ourGui and o:IsDescendantOf(ourGui)) and not inSkipTree(o) then
                     addLine(string.format("你点到了 (%.0f,%.0f) > %s", pos.X, pos.Y, desc(o)))
                 end
             end
@@ -419,52 +461,58 @@ UIS.InputBegan:Connect(function(input)
     end
 end)
 
--- ==================== 侦查3：Remote 调用记录 ====================
+-- ==================== 侦查4：Remote 调用（默认关） ====================
 pcall(function()
     local mt = getrawmetatable(game)
     local oldNamecall = mt.__namecall
     setreadonly(mt, false)
     mt.__namecall = newcclosure(function(self, ...)
         local method = getnamecallmethod()
-        if HookRemoteLog and (method == "FireServer" or method == "InvokeServer")
-            and typeof(self) == "Instance" then
-            local key = self:GetFullName()
-            remoteCount[key] = (remoteCount[key] or 0) + 1
-            if remoteCount[key] <= 3 then
-                local args = { ... }
-                local shown = {}
-                for i = 1, math.min(#args, 4) do
-                    local v = args[i]
-                    local ty = typeof(v)
-                    if ty == "Instance" then
-                        table.insert(shown, v:GetFullName())
-                    elseif ty == "Vector3" or ty == "CFrame" then
-                        table.insert(shown, tostring(v))
-                    else
-                        table.insert(shown, tostring(v):sub(1, 30))
+        if (method == "FireServer" or method == "InvokeServer") and typeof(self) == "Instance" then
+            remoteCallCount = remoteCallCount + 1
+            if HookRemoteLog and remoteCallCount < 3000 then
+                local key = self:GetFullName()
+                remoteCount[key] = (remoteCount[key] or 0) + 1
+                if remoteCount[key] <= 2 and not remoteFilter[key] then
+                    remoteFilter[key] = true
+                    local args = { ... }
+                    local shown = {}
+                    for i = 1, math.min(#args, 4) do
+                        local v = args[i]
+                        local ty = typeof(v)
+                        if ty == "Instance" then
+                            table.insert(shown, v:GetFullName())
+                        elseif ty == "Vector3" or ty == "CFrame" then
+                            table.insert(shown, tostring(v))
+                        else
+                            table.insert(shown, tostring(v):sub(1, 24))
+                        end
                     end
+                    addLine("Remote > " .. method .. " " .. key
+                        .. (#shown > 0 and (" | 参数: " .. table.concat(shown, ", ")) or ""))
                 end
-                addLine("Remote > " .. method .. " " .. key
-                    .. (#shown > 0 and (" | 参数: " .. table.concat(shown, ", ")) or ""))
             end
         end
         return oldNamecall(self, ...)
     end)
     setreadonly(mt, true)
-    table.insert(allLines, "Remote Hook 已安装")
 end)
 
--- ==================== 侦查4：全量打印 ====================
-function dumpAll()
-    addLine("====== 当前屏幕可见 GUI ======")
+-- ==================== 侦查5：全量打印 ====================
+dumpAll = function()
+    addLine("====== 当前可见 GUI ======")
     local list = {}
-    for _, r in ipairs(roots()) do
+    for _, r in ipairs(getRoots()) do
         pcall(function()
-            for _, o in ipairs(r:GetDescendants()) do
-                if o:IsA("GuiObject") and o.Visible and not isNoise(o) then
-                    local sz = o.AbsoluteSize
-                    if sz.X * sz.Y > 150 then
-                        table.insert(list, o)
+            for _, sg in ipairs(r:GetChildren()) do
+                if sg:IsA("ScreenGui") and not ROOT_SKIP[sg.Name] then
+                    for _, o in ipairs(sg:GetDescendants()) do
+                        if o:IsA("GuiObject") and o.Visible then
+                            local sz = o.AbsoluteSize
+                            if sz.X * sz.Y > 150 then
+                                table.insert(list, o)
+                            end
+                        end
                     end
                 end
             end
@@ -480,7 +528,7 @@ function dumpAll()
     addLine("====== 共 " .. #list .. " 个 ======")
 end
 
--- ==================== 按下去（三种方式） ====================
+-- ==================== 按下去 ====================
 local function pressAt(x, y, obj)
     x, y = math.floor(x), math.floor(y)
 
@@ -520,7 +568,6 @@ local function pressAt(x, y, obj)
         return byExecutorMouse()
     end
 
-    -- auto：按钮先走 firesignal（手机上最靠谱），再补真实点击
     local done = false
     if obj and obj:IsA("GuiButton") then
         done = byFireSignal()
@@ -533,7 +580,7 @@ local function pressAt(x, y, obj)
     return true
 end
 
--- ==================== 启发式自动按（默认关） ====================
+-- ==================== 启发式自动按 ====================
 heuristicTry = function(o)
     if not HeuristicPress then return end
     if not o.Parent or not o.Visible then return end
@@ -553,13 +600,14 @@ if not okGui then
     print("[QTE侦查] 面板创建失败：" .. tostring(guiErr))
 end
 
+-- 慢速轮询（第一遍静默建档，不刷日志）
 task.spawn(function()
     while true do
-        task.wait(0.1)
-        pcall(scanNew)
+        pcall(slowScan)
+        task.wait(POLL_INTERVAL)
     end
 end)
 
-addLine("====== QTE 侦查已启动 ======")
-addLine("先点「清空」，再手动做一次 QTE，不会看的话点「复制日志」发我")
+addLine("====== QTE 侦查已启动（低占用版）=====")
+addLine("先点「清空」，手动做一次 QTE，再点「复制日志」发我")
 notify("QTE侦查已启动", "面板在左上角，拖标题栏可移动")
