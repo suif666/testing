@@ -106,29 +106,29 @@ local function ndsStart()
     return true
 end
 
-local ndsSec = Tab:Section({ Title = "苹果/气球刷", Icon = "apple", Opened = true })
+local ndsSec = Tab:Section({ Title = "攻击类", Icon = "apple", Opened = true })
 
 ndsSec:Toggle({
-    Title = "开启苹果/气球刷",
-    Desc = "每帧按下面倍率发送点击（原版脚本 AttackRate=10 就是这里的倍率 10）",
+    Title = "所有人变noob",
+    Desc = "循环购买物品使服务器卡爆 新玩家普遍中招 老玩家让他们死一次就可以变了",
     Icon = "zap",
     Type = "Checkbox",
     Value = false,
     Callback = function(s)
         if s then
             if ndsStart() then
-                notify("苹果/气球刷", "已开启，倍率 " .. tostring(NDS.rate), "check", 3)
+                notify("新玩家变noob", "已开启，倍率 " .. tostring(NDS.rate), "check", 3)
             end
         else
             ndsStop()
-            notify("苹果/气球刷", "已关闭", "info", 3)
+            notify("新玩家变noob", "已关闭", "info", 3)
         end
     end
 })
 
 ndsSec:Slider({
-    Title = "倍率",
-    Desc = "每帧发送次数（10 = 原版脚本强度，也就是每帧 20 次远程调用）",
+    Title = "攻击速度",
+    Desc = "用处不大 默认就好",
     Step = 1,
     Value = { Min = 1, Max = 30, Default = 10 },
     Callback = function(v)
@@ -194,8 +194,8 @@ local function ndsWinSet(idx, on, cf, name)
 end
 
 ndsMainSec:Toggle({
-    Title = "自动胜利1",
-    Desc = "持续传送到胜利位置1（原版写法会卡界面，这里改成开关）",
+    Title = "自动胜利",
+    Desc = "持续传送到安全位置",
     Icon = "trophy",
     Type = "Checkbox",
     Value = false,
@@ -205,8 +205,8 @@ ndsMainSec:Toggle({
 })
 
 ndsMainSec:Toggle({
-    Title = "在水上行走",
-    Desc = "打开水面碰撞（把 WaterLevel 拉成 5000x1x5000），关掉恢复原样",
+    Title = "冰霜行者",
+    Desc = "打开水面碰撞 使角色可以在水面行走",
     Icon = "waves",
     Type = "Checkbox",
     Value = false,
@@ -226,7 +226,7 @@ ndsMainSec:Toggle({
 
 ndsMainSec:Toggle({
     Title = "岛边缘实体碰撞",
-    Desc = "打开 LowerRocks 的碰撞，掉到岛边缘不会直接滑下去",
+    Desc = "掉到岛边缘不会直接穿墙掉下去了",
     Icon = "mountain",
     Type = "Checkbox",
     Value = false,
@@ -283,15 +283,15 @@ local function ndsKnockStop()
 end
 
 ndsMainSec:Toggle({
-    Title = "防击退（防摔伤）",
-    Desc = "每帧抵消一次速度：防止被灾害击飞、摔伤；会造成移动手感发飘，只在需要时开",
+    Title = "免疫部分伤害",
+    Desc = "可以免疫游戏内部分伤害 比如烧伤 沙尘暴 冻伤等\n但可能会导致部分功能失效 比如载具乘坐",
     Icon = "shield",
     Type = "Checkbox",
     Value = false,
     Callback = function(s)
         ndsKnockStop()
         if not s then
-            notify("防击退", "已关闭，物理恢复正常", "info", 2)
+            notify("免疫伤害", "已关闭", "info", 2)
             return
         end
         ndsKnockOn = true
@@ -302,7 +302,7 @@ ndsMainSec:Toggle({
             task.wait(0.3)
             if ndsKnockOn then ndsKnockAttach(c) end
         end)
-        notify("防击退", "已开启", "check", 2)
+        notify("免疫伤害", "已开启", "check", 2)
     end
 })
 
@@ -310,8 +310,8 @@ ndsMainSec:Toggle({
 local ndsTpSec = Tab:Section({ Title = "传送", Icon = "map-pin", Opened = false })
 
 ndsTpSec:Button({
-    Title = "灾害岛",
-    Desc = "传送到灾害岛（位置可能偏差）",
+    Title = "海上小岛",
+    Desc = "传送到小岛",
     Icon = "map-pin",
     Callback = function() ndsTeleport(NDS_CF.island, "已传送到灾害岛") end
 })
@@ -327,8 +327,8 @@ ndsTpSec:Button({
 local ndsItemSec = Tab:Section({ Title = "道具功能", Icon = "compass", Opened = false })
 
 ndsItemSec:Button({
-    Title = "暂停游戏运行（所有人可见）",
-    Desc = "需要背包里有指南针；通过 Compass 远程投票让游戏卡住",
+    Title = "时停",
+    Desc = "需要背包里有指南针；通过远程投票让游戏卡住",
     Icon = "pause",
     Callback = function()
         task.spawn(function()
@@ -350,7 +350,7 @@ ndsItemSec:Button({
             end)
             task.wait(0.1)
             pcall(function() hum:UnequipTools() end)
-            notify("已发送", "已通过指南针投票（暂停游戏）", "check", 3)
+            notify("已发送", "已通过指南针投票", "check", 3)
         end)
     end
 })
