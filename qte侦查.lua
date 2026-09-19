@@ -1,8 +1,15 @@
 --[[
-    方块故事(Block Tales) QTE 侦查 + 自动按工具【手机版 · v3】
+    方块故事(Block Tales) QTE 侦查 + 自动按工具【手机版 · v4】
     ------------------------------------------------------------------
-    面板标题会显示版本号（当前：v3 · 09-19 11:30）——
-    如果你面板上没看到 "v3"，说明执行的是旧版，请重新导入本文件。
+    面板标题显示版本号（当前：v4 · 09-19 11:45）——
+    没看到 "v4" 就是执行了旧版，请重新导入本文件。
+
+    v4 修复：
+      - 面板拆成「一步一个 pcall」，任何一步失败都不会让后面的按钮消失
+      - 创建失败会直接在屏幕上显示红色报错（不用翻控制台）
+      - 砍掉易出问题的 API：ScrollingFrame / AutomaticSize / UIListLayout / 字体枚举
+      - 面板尺寸严格限制在屏幕内，按钮用格子手工排版，绝不跑到屏幕外
+      - 拖动改用全局 UIS.InputChanged，手指移出标题栏也继续跟手
 
     全部操作都在屏幕上的小面板里点，不需要键盘。
     面板日志可以直接「复制日志」发给我。
@@ -31,8 +38,8 @@ local HeuristicPress = false     -- 启发式自动按
 local IncludeSystemUI = false    -- 是否连 Roblox 自身 UI(CoreGui) 一起抓
 local PressMethod = "auto"       -- "auto" / "firesignal" / "vim" / "mouse"
 local GUI_NAME = "QTE_Recon_Panel"
-local VERSION = "v3"                         -- ★ 面板标题会显示这个，用来确认你跑的是哪一版
-local BUILD = "09-19 11:30"
+local VERSION = "v4"                         -- ★ 面板标题会显示这个，用来确认你跑的是哪一版
+local BUILD = "09-19 11:45"
 local dead = false                           -- 点「停止」后置 true，所有循环退出
 local POLL_INTERVAL = 1.2        -- 慢速轮询间隔（秒）
 local LOG_RATE_PER_SEC = 6       -- 日志每秒最多几行
@@ -196,168 +203,165 @@ local function buildGui()
         if gethui then parent = gethui() end
     end)
 
-    local gui = Instance.new("ScreenGui")
-    gui.Name = GUI_NAME
-    gui.ResetOnSpawn = false
-    gui.IgnoreGuiInset = true
-    gui.DisplayOrder = 9999
-    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    gui.Parent = parent
-    ourGui = gui
-
+    -- 屏幕尺寸：面板必须完整放进屏幕内，否则按钮会被挤到屏幕外（上一版的坑）
     local vp = Vector2.new(800, 400)
     pcall(function()
         local cam = workspace.CurrentCamera
         if cam and cam.ViewportSize then vp = cam.ViewportSize end
     end)
-    local panelW = math.clamp(math.floor(vp.X * 0.50), 280, 400)
-    local panelH = math.clamp(math.floor(vp.Y * 0.75), 230, 400)
 
+    local panelW = math.floor(math.min(400, vp.X * 0.55))
+    local panelH = math.floor(math.min(380, vp.Y * 0.72))
+    panelW = math.floor(math.max(250, math.min(panelW, vp.X - 24)))
+    panelH = math.floor(math.max(190, math.min(panelH, vp.Y - 56)))
+
+    local titleH = 30
+    local COLS, ROWS, BTN_H, GAP = 4, 3, 32, 6
+    local btnAreaH = ROWS * BTN_H + (ROWS - 1) * GAP
+    local logTop = titleH + 6
+    local logH = math.max(36, panelH - logTop - btnAreaH - 10)
+    local btnW = math.floor((panelW - 12 - (COLS - 1) * GAP) / COLS)
+
+    -- 每一步单独 pcall：任何一步失败都不影响其他部分，并且错误会显示在屏幕上
+    local errs = {}
+    local function step(what, fn)
+        local ok, err = pcall(fn)
+        if not ok then
+            table.insert(errs, what .. ": " .. tostring(err))
+            print("[QTE侦查] 创建失败 " .. what .. " -> " .. tostring(err))
+        end
+        return ok
+    end
+
+    local gui
+    step("ScreenGui", function()
+        gui = Instance.new("ScreenGui")
+        gui.Name = GUI_NAME
+        gui.ResetOnSpawn = false
+        gui.IgnoreGuiInset = true
+        gui.DisplayOrder = 9999
+        gui.Parent = parent
+    end)
+    if not gui then                       -- 兜底：直接挂 PlayerGui
+        gui = Instance.new("ScreenGui")
+        gui.Name = GUI_NAME
+        gui.ResetOnSpawn = false
+        gui.Parent = pg
+    end
+    ourGui = gui
+
+    -- 主面板
     main = Instance.new("Frame")
     main.Name = "Main"
     main.Size = UDim2.new(0, panelW, 0, panelH)
-    main.Position = UDim2.new(0, 8, 0, 40)
+    main.Position = UDim2.new(0, 10, 0, 40)
     main.BackgroundColor3 = Color3.fromRGB(24, 24, 30)
-    main.BackgroundTransparency = 0.08
+    main.BackgroundTransparency = 0.05
     main.BorderSizePixel = 0
     main.Active = true
-    main.Draggable = false
     main.Parent = gui
-    Instance.new("UICorner", main).CornerRadius = UDim.new(0, 10)
 
+    -- 标题栏（拖这里移动面板）
     local title = Instance.new("Frame")
     title.Name = "TitleBar"
-    title.Size = UDim2.new(1, 0, 0, 32)
-    title.BackgroundColor3 = Color3.fromRGB(36, 36, 46)
+    title.Size = UDim2.new(1, 0, 0, titleH)
+    title.BackgroundColor3 = Color3.fromRGB(40, 40, 54)
     title.BorderSizePixel = 0
-    title.Active = true                      -- ★ 必须：Frame 默认 Active=false，收不到触摸
+    title.Active = true                    -- ★ 必须，否则收不到触摸
     title.Parent = main
-    Instance.new("UICorner", title).CornerRadius = UDim.new(0, 10)
 
     local titleText = Instance.new("TextLabel")
-    titleText.Size = UDim2.new(1, -80, 1, 0)
-    titleText.Position = UDim2.new(0, 10, 0, 0)
+    titleText.Size = UDim2.new(1, -10, 1, 0)
+    titleText.Position = UDim2.new(0, 6, 0, 0)
     titleText.BackgroundTransparency = 1
-    titleText.Text = "QTE侦查 " .. VERSION .. " · " .. BUILD
-    titleText.TextColor3 = Color3.fromRGB(230, 230, 240)
+    titleText.Text = "QTE侦查 " .. VERSION .. " · " .. BUILD .. "   拖这里移动"
+    titleText.TextColor3 = Color3.fromRGB(235, 235, 245)
     titleText.TextSize = 14
-    titleText.Font = Enum.Font.GothamBold
     titleText.TextXAlignment = Enum.TextXAlignment.Left
-    titleText.Active = true                  -- ★ 必须：TextLabel 同理
+    titleText.TextWrapped = false
+    titleText.Active = true                -- ★ 必须
     titleText.Parent = title
 
-    local hideBtn = Instance.new("TextButton")
-    hideBtn.Size = UDim2.new(0, 62, 0, 22)
-    hideBtn.Position = UDim2.new(1, -68, 0, 5)
-    hideBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 78)
-    hideBtn.BorderSizePixel = 0
-    hideBtn.Text = "隐藏"
-    hideBtn.TextColor3 = Color3.fromRGB(235, 235, 245)
-    hideBtn.TextSize = 13
-    hideBtn.Font = Enum.Font.Gotham
-    hideBtn.Parent = title
-    Instance.new("UICorner", hideBtn).CornerRadius = UDim.new(0, 6)
+    -- 日志区：纯 Frame + TextLabel（不用 ScrollingFrame / AutomaticSize，这两个最容易被旧客户端坑）
+    local logBox = Instance.new("Frame")
+    logBox.Name = "LogBox"
+    logBox.Size = UDim2.new(1, -12, 0, logH)
+    logBox.Position = UDim2.new(0, 6, 0, logTop)
+    logBox.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
+    logBox.BorderSizePixel = 0
+    logBox.Parent = main
 
-    local logScroll = Instance.new("ScrollingFrame")
-    logScroll.Size = UDim2.new(1, -16, 1, -166)
-    logScroll.Position = UDim2.new(0, 8, 0, 38)
-    logScroll.BackgroundColor3 = Color3.fromRGB(15, 15, 19)
-    logScroll.BorderSizePixel = 0
-    logScroll.ScrollBarThickness = 3
-    logScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-    logScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-    logScroll.Parent = main
-    Instance.new("UICorner", logScroll).CornerRadius = UDim.new(0, 8)
+    local linesFit = math.max(3, math.floor((logH - 6) / 14))
 
     logLabel = Instance.new("TextLabel")
+    logLabel.Name = "LogText"
     logLabel.Size = UDim2.new(1, -8, 0, 0)
-    logLabel.Position = UDim2.new(0, 4, 0, 4)
+    logLabel.Position = UDim2.new(0, 4, 0, 3)
     logLabel.BackgroundTransparency = 1
     logLabel.Text = ""
     logLabel.TextColor3 = Color3.fromRGB(190, 220, 190)
     logLabel.TextSize = 11
-    logLabel.Font = Enum.Font.Code
     logLabel.TextXAlignment = Enum.TextXAlignment.Left
     logLabel.TextYAlignment = Enum.TextYAlignment.Top
-    logLabel.TextWrapped = false                 -- ★ 关掉自动换行（换行排版是卡顿来源）
-    logLabel.AutomaticSize = Enum.AutomaticSize.Y
-    logLabel.Parent = logScroll
+    logLabel.TextWrapped = false
+    logLabel.Parent = logBox
 
+    -- 按钮区：手工排格子（不用 UIListLayout / Wrap，避免布局 API 差异）
     local btnRow = Instance.new("Frame")
-    btnRow.Size = UDim2.new(1, -16, 0, 112)
-    btnRow.Position = UDim2.new(0, 8, 1, -120)
+    btnRow.Name = "Buttons"
+    btnRow.Size = UDim2.new(1, -12, 0, btnAreaH)
+    btnRow.Position = UDim2.new(0, 6, 1, -(btnAreaH + 6))
     btnRow.BackgroundTransparency = 1
     btnRow.Parent = main
-    local list = Instance.new("UIListLayout", btnRow)
-    list.FillDirection = Enum.FillDirection.Horizontal
-    list.Wrap = true
-    list.Padding = UDim.new(0, 6)
 
-    local function mkBtn(text, w, color, onClick)
+    local index = 0
+    local function mkBtn(text, color, onClick)
+        local col = index % COLS
+        local row = math.floor(index / COLS)
+        index = index + 1
         local b = Instance.new("TextButton")
-        b.Size = UDim2.new(0, w, 0, 32)
-        b.BackgroundColor3 = color or Color3.fromRGB(52, 52, 66)
+        b.Size = UDim2.new(0, btnW, 0, BTN_H)
+        b.Position = UDim2.new(0, col * (btnW + GAP), 0, row * (BTN_H + GAP))
+        b.BackgroundColor3 = color or Color3.fromRGB(56, 56, 72)
         b.BorderSizePixel = 0
         b.Text = text
-        b.TextColor3 = Color3.fromRGB(238, 238, 248)
+        b.TextColor3 = Color3.fromRGB(240, 240, 250)
         b.TextSize = 13
-        b.Font = Enum.Font.GothamBold
+        b.TextScaled = true                -- 窄屏也放得下
         b.Parent = btnRow
-        Instance.new("UICorner", b).CornerRadius = UDim.new(0, 7)
         bindTap(b, function()
             local ok, err = pcall(onClick)
-            if not ok then addLine("按钮出错: " .. tostring(err)) end
+            if not ok then addLine("按钮出错: " .. tostring(err), true) end
         end)
         return b
     end
 
-    mkBtn("打印GUI", 84, Color3.fromRGB(52, 84, 120), function()
+    mkBtn("打印GUI", Color3.fromRGB(52, 84, 120), function()
         dumpAll()
         notify("QTE侦查", "已打印当前可见 GUI")
     end)
 
-    logBtnRemote = mkBtn("Remote:关", 92, Color3.fromRGB(60, 60, 78), function()
+    logBtnRemote = mkBtn("Remote:关", Color3.fromRGB(60, 60, 78), function()
         HookRemoteLog = not HookRemoteLog
         remoteFilter, remoteCount, remoteCallCount = {}, {}, 0
         logBtnRemote.Text = HookRemoteLog and "Remote:开" or "Remote:关"
         logBtnRemote.BackgroundColor3 = HookRemoteLog
             and Color3.fromRGB(46, 120, 70) or Color3.fromRGB(60, 60, 78)
         addLine(HookRemoteLog and "=== 开始记录 Remote（现在去做 QTE）==="
-            or "=== 停止记录 Remote ===")
+            or "=== 停止记录 Remote ===", true)
         notify("QTE侦查", HookRemoteLog and "开始记录 Remote" or "已停止记录")
     end)
 
-    mkBtn("清空", 60, Color3.fromRGB(90, 70, 50), function()
-        showLines, allLines = {}, {}
-        seen = setmetatable({}, { __mode = "k" })
-        remoteFilter, remoteCount, remoteCallCount = {}, {}, 0
-        logDirty = true
-        addLine("=== 已清空（现在去做一次 QTE）===")
-        notify("QTE侦查", "日志已清空")
-    end)
-
-    logBtnAuto = mkBtn("自动按:关", 92, Color3.fromRGB(60, 60, 78), function()
+    logBtnAuto = mkBtn("自动按:关", Color3.fromRGB(60, 60, 78), function()
         HeuristicPress = not HeuristicPress
         logBtnAuto.Text = HeuristicPress and "自动按:开" or "自动按:关"
         logBtnAuto.BackgroundColor3 = HeuristicPress
             and Color3.fromRGB(46, 120, 70) or Color3.fromRGB(60, 60, 78)
-        addLine(HeuristicPress and "=== 启发式自动按：开启 ===" or "=== 启发式自动按：关闭 ===")
+        addLine(HeuristicPress and "=== 启发式自动按：开启 ===" or "=== 启发式自动按：关闭 ===", true)
         notify("QTE侦查", HeuristicPress and "自动按已开启" or "自动按已关闭")
     end)
 
-    mkBtn("复制日志", 92, Color3.fromRGB(46, 96, 130), function()
-        local text = table.concat(allLines, "\n")
-        local fn = setclipboard or toclipboard or (syn and syn.setclipboard)
-        if fn then
-            pcall(fn, text)
-            addLine("已复制 " .. #allLines .. " 行日志")
-            notify("QTE侦查", "日志已复制，粘贴给我即可")
-        else
-            notify("QTE侦查", "这个执行器没有 setclipboard")
-        end
-    end)
-
-    local sysBtn = mkBtn("系统UI:关", 92, Color3.fromRGB(60, 60, 78), function()
+    local sysBtn = mkBtn("系统UI:关", Color3.fromRGB(60, 60, 78), function()
         IncludeSystemUI = not IncludeSystemUI
         sysBtn.Text = IncludeSystemUI and "系统UI:开" or "系统UI:关"
         sysBtn.BackgroundColor3 = IncludeSystemUI
@@ -368,7 +372,28 @@ local function buildGui()
         notify("QTE侦查", IncludeSystemUI and "含系统UI（可能卡）" or "只抓游戏UI")
     end)
 
-    local pressBtn = mkBtn("Press:auto", 98, Color3.fromRGB(70, 70, 90), function()
+    mkBtn("清空", Color3.fromRGB(90, 70, 50), function()
+        showLines, allLines = {}, {}
+        seen = setmetatable({}, { __mode = "k" })
+        remoteFilter, remoteCount, remoteCallCount = {}, {}, 0
+        logDirty = true
+        addLine("=== 已清空（现在去做一次 QTE）===", true)
+        notify("QTE侦查", "日志已清空")
+    end)
+
+    mkBtn("复制日志", Color3.fromRGB(46, 96, 130), function()
+        local text = table.concat(allLines, "\n")
+        local fn = setclipboard or toclipboard or (syn and syn.setclipboard)
+        if fn then
+            pcall(fn, text)
+            addLine("已复制 " .. #allLines .. " 行日志到剪贴板", true)
+            notify("QTE侦查", "日志已复制，粘贴给我即可")
+        else
+            notify("QTE侦查", "这个执行器没有 setclipboard")
+        end
+    end)
+
+    local pressBtn = mkBtn("Press:auto", Color3.fromRGB(70, 70, 92), function()
         if PressMethod == "auto" then
             PressMethod = "firesignal"
         elseif PressMethod == "firesignal" then
@@ -379,10 +404,15 @@ local function buildGui()
             PressMethod = "auto"
         end
         pressBtn.Text = "Press:" .. PressMethod
-        addLine("按法切换为：" .. PressMethod)
+        addLine("按法切换为：" .. PressMethod, true)
     end)
 
-    mkBtn("停止", 62, Color3.fromRGB(130, 62, 62), function()
+    local hideBtn = mkBtn("隐藏", Color3.fromRGB(60, 60, 78), function()
+        main.Visible = false
+        bubble.Visible = true
+    end)
+
+    local stopBtn = mkBtn("停止", Color3.fromRGB(130, 62, 62), function()
         addLine("=== 已停止侦查（重新执行脚本可再启动）===", true)
         dead = true
         task.wait(0.2)
@@ -390,79 +420,91 @@ local function buildGui()
         notify("QTE侦查", "已停止，脚本已卸载")
     end)
 
+    -- 收起后的小圆点
     bubble = Instance.new("TextButton")
-    bubble.Size = UDim2.new(0, 46, 0, 46)
-    bubble.Position = UDim2.new(1, -60, 0, 120)
+    bubble.Name = "Bubble"
+    bubble.Size = UDim2.new(0, 48, 0, 48)
+    bubble.Position = UDim2.new(1, -62, 0, 120)
     bubble.BackgroundColor3 = Color3.fromRGB(46, 96, 130)
     bubble.BorderSizePixel = 0
     bubble.Text = "QTE"
     bubble.TextColor3 = Color3.fromRGB(240, 240, 250)
-    bubble.TextSize = 13
-    bubble.Font = Enum.Font.GothamBold
+    bubble.TextSize = 14
     bubble.Visible = false
     bubble.Parent = gui
-    Instance.new("UICorner", bubble).CornerRadius = UDim.new(1, 0)
-
-    bindTap(hideBtn, function()
-        main.Visible = false
-        bubble.Visible = true
-    end)
     bindTap(bubble, function()
         main.Visible = true
         bubble.Visible = false
     end)
 
-    -- 拖动（触摸 + 鼠标）
+    -- ★ 拖动：用全局 UIS.InputChanged，手指移出标题栏也继续跟手（面板上任何非按钮处都能拖）
     local dragging, dragStart, startPos = false, nil, nil
-
-    -- 点是否落在某个 GUI 的矩形范围内
-    local function insideGui(o, p)
-        if not (o and p) then return false end
-        local a, s = o.AbsolutePosition, o.AbsoluteSize
-        return p.X >= a.X and p.X <= a.X + s.X and p.Y >= a.Y and p.Y <= a.Y + s.Y
-    end
-
     local function beginDrag(input)
         if input.UserInputType ~= Enum.UserInputType.MouseButton1
             and input.UserInputType ~= Enum.UserInputType.Touch then return end
-        -- 日志区/按钮区里开始的滑动不算拖动（留给滚动和点击）
-        if insideGui(logScroll, input.Position) or insideGui(btnRow, input.Position) then
-            return
-        end
         dragging = true
         dragStart = input.Position
         startPos = main.Position
-        input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then
-                dragging = false
-            end
-        end)
     end
-    title.InputBegan:Connect(beginDrag)
-    titleText.InputBegan:Connect(beginDrag)
-    main.InputBegan:Connect(beginDrag)       -- 拖面板空白/日志区也能移动
-    title.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
-            or input.UserInputType == Enum.UserInputType.Touch) then
-            local d = input.Position - dragStart
-            main.Position = UDim2.new(
-                startPos.X.Scale, startPos.X.Offset + d.X,
-                startPos.Y.Scale, startPos.Y.Offset + d.Y)
+    pcall(function() title.InputBegan:Connect(beginDrag) end)
+    pcall(function() titleText.InputBegan:Connect(beginDrag) end)
+    pcall(function() main.InputBegan:Connect(beginDrag) end)
+
+    UIS.InputChanged:Connect(function(i)
+        if not dragging then return end
+        if i.UserInputType ~= Enum.UserInputType.MouseMovement
+            and i.UserInputType ~= Enum.UserInputType.Touch then return end
+        local d = i.Position - dragStart
+        main.Position = UDim2.new(
+            startPos.X.Scale, startPos.X.Offset + d.X,
+            startPos.Y.Scale, startPos.Y.Offset + d.Y)
+    end)
+    UIS.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1
+            or i.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
         end
     end)
 
-    -- 日志刷新：0.5 秒一次，只在有变化时写
+    -- 日志刷新：0.5 秒一次，只显示能放下的行数（不需要滚动条）
     task.spawn(function()
-        while true do
+        while not dead do
             task.wait(0.5)
             if logDirty and logLabel then
                 logDirty = false
                 pcall(function()
-                    logLabel.Text = table.concat(showLines, "\n")
+                    local from = math.max(1, #showLines - linesFit + 1)
+                    local out = {}
+                    for i = from, #showLines do
+                        table.insert(out, showLines[i])
+                    end
+                    logLabel.Text = table.concat(out, "\n")
                 end)
             end
         end
     end)
+
+    -- 任何一步失败都直接显示在屏幕上（手机上也能看到，不用翻控制台）
+    if #errs > 0 then
+        local banner = Instance.new("TextLabel")
+        banner.Name = "ErrBanner"
+        banner.Size = UDim2.new(1, -12, 0, 40)
+        banner.Position = UDim2.new(0, 6, 0, logTop)
+        banner.BackgroundColor3 = Color3.fromRGB(150, 40, 40)
+        banner.BackgroundTransparency = 0.1
+        banner.Text = "⚠ 创建出错：" .. tostring(errs[1])
+        banner.TextColor3 = Color3.fromRGB(255, 235, 235)
+        banner.TextSize = 11
+        banner.TextWrapped = true
+        banner.ZIndex = 5
+        banner.Parent = main
+        for _, e in ipairs(errs) do
+            addLine("创建失败 > " .. e, true)
+        end
+    end
+
+    addLine(string.format("面板 %dx%d / 屏幕 %dx%d / 每屏 %d 行",
+        panelW, panelH, vp.X, vp.Y, linesFit), true)
 end
 
 -- ==================== 判定一个元素值不值得报告 ====================
