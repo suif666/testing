@@ -25,6 +25,7 @@ local pg = lp:WaitForChild("PlayerGui")
 -- ==================== 开关 ====================
 local HookRemoteLog = false      -- Remote 记录（默认关，很刷屏）
 local HeuristicPress = false     -- 启发式自动按
+local IncludeSystemUI = false    -- 是否连 Roblox 自身 UI(CoreGui) 一起抓
 local PressMethod = "auto"       -- "auto" / "firesignal" / "vim" / "mouse"
 local GUI_NAME = "QTE_Recon_Panel"
 local POLL_INTERVAL = 1.2        -- 慢速轮询间隔（秒）
@@ -38,9 +39,16 @@ local remoteCallCount = 0
 local heuristicTry
 local ourGui
 
--- 这些顶层 ScreenGui 直接跳过，不遍历（系统 UI 树很大，是卡顿主因之一）
-local ROOT_SKIP = {
+-- 永远跳过：我们自己的界面 + 其他脚本界面
+local ALWAYS_SKIP = {
     [GUI_NAME] = true,
+    WindUI = true,
+    CoordTP = true,
+}
+
+-- Roblox 自身 UI（在 CoreGui 里）：默认跳过（树很大、会卡）
+-- IncludeSystemUI = true 时连它们一起抓（面板上「系统UI」按钮切换）
+local SYSTEM_SKIP = {
     RobloxGui = true,
     RobloxLoadingGui = true,
     BubbleChat = true,
@@ -49,9 +57,13 @@ local ROOT_SKIP = {
     TopBar = true,
     Topbar = true,
     Notification = true,
-    WindUI = true,
-    CoordTP = true,
 }
+
+local function shouldSkipRoot(name)
+    if ALWAYS_SKIP[name] then return true end
+    if SYSTEM_SKIP[name] and not IncludeSystemUI then return true end
+    return false
+end
 
 -- ==================== 日志 ====================
 local MAX_SHOW = 60              -- 面板最多显示多少行
@@ -62,18 +74,18 @@ local logDirty = false
 local logLabel
 local rateCount, rateStart = 0, os.clock()
 
-local function addLine(s)
+local function addLine(s, force)
     s = tostring(s)
     table.insert(allLines, s)
     if #allLines > 4000 then table.remove(allLines, 1) end
 
-    -- 限流：超了就只统计，不刷屏
+    -- 限流：超了就只统计，不刷屏（force=true 时不受限，用于自检等关键信息）
     local now = os.clock()
     if now - rateStart >= 1 then
         rateStart, rateCount = now, 0
     end
     rateCount = rateCount + 1
-    if rateCount > LOG_RATE_PER_SEC then
+    if not force and rateCount > LOG_RATE_PER_SEC then
         if rateCount == LOG_RATE_PER_SEC + 1 then
             table.insert(showLines, "...（日志太多，已限流）")
             logDirty = true
@@ -121,11 +133,24 @@ end
 local function inSkipTree(o)
     local cur, d = o, 0
     while cur and d < 6 do
-        if ROOT_SKIP[cur.Name] then return true end
+        if shouldSkipRoot(cur.Name) then return true end
         cur = cur.Parent
         d = d + 1
     end
     return false
+end
+
+-- 按钮绑定：Activated + MouseButton1Click 双保险（手机执行器有时只触发其中一个）
+local function bindTap(btn, fn)
+    local last = 0
+    local function fire()
+        local now = os.clock()
+        if now - last < 0.25 then return end
+        last = now
+        task.spawn(fn)
+    end
+    pcall(function() btn.Activated:Connect(fire) end)
+    pcall(function() btn.MouseButton1Click:Connect(fire) end)
 end
 
 local function notify(title, text)
@@ -159,8 +184,8 @@ local function buildGui()
         local cam = workspace.CurrentCamera
         if cam and cam.ViewportSize then vp = cam.ViewportSize end
     end)
-    local panelW = math.clamp(math.floor(vp.X * 0.42), 250, 350)
-    local panelH = math.clamp(math.floor(vp.Y * 0.62), 190, 330)
+    local panelW = math.clamp(math.floor(vp.X * 0.50), 280, 400)
+    local panelH = math.clamp(math.floor(vp.Y * 0.72), 220, 380)
 
     main = Instance.new("Frame")
     main.Name = "Main"
@@ -179,6 +204,7 @@ local function buildGui()
     title.Size = UDim2.new(1, 0, 0, 32)
     title.BackgroundColor3 = Color3.fromRGB(36, 36, 46)
     title.BorderSizePixel = 0
+    title.Active = true                      -- ★ 必须：Frame 默认 Active=false，收不到触摸
     title.Parent = main
     Instance.new("UICorner", title).CornerRadius = UDim.new(0, 10)
 
@@ -191,6 +217,7 @@ local function buildGui()
     titleText.TextSize = 14
     titleText.Font = Enum.Font.GothamBold
     titleText.TextXAlignment = Enum.TextXAlignment.Left
+    titleText.Active = true                  -- ★ 必须：TextLabel 同理
     titleText.Parent = title
 
     local hideBtn = Instance.new("TextButton")
@@ -251,7 +278,7 @@ local function buildGui()
         b.Font = Enum.Font.GothamBold
         b.Parent = btnRow
         Instance.new("UICorner", b).CornerRadius = UDim.new(0, 7)
-        b.MouseButton1Click:Connect(function()
+        bindTap(b, function()
             local ok, err = pcall(onClick)
             if not ok then addLine("按钮出错: " .. tostring(err)) end
         end)
@@ -304,6 +331,17 @@ local function buildGui()
         end
     end)
 
+    local sysBtn = mkBtn("系统UI:关", 92, Color3.fromRGB(60, 60, 78), function()
+        IncludeSystemUI = not IncludeSystemUI
+        sysBtn.Text = IncludeSystemUI and "系统UI:开" or "系统UI:关"
+        sysBtn.BackgroundColor3 = IncludeSystemUI
+            and Color3.fromRGB(46, 120, 70) or Color3.fromRGB(60, 60, 78)
+        addLine(IncludeSystemUI
+            and "=== 连 Roblox 自身UI一起抓（可能变卡，抓完建议关掉）==="
+            or "=== 只抓游戏UI ===", true)
+        notify("QTE侦查", IncludeSystemUI and "含系统UI（可能卡）" or "只抓游戏UI")
+    end)
+
     local pressBtn = mkBtn("Press:auto", 98, Color3.fromRGB(70, 70, 90), function()
         if PressMethod == "auto" then
             PressMethod = "firesignal"
@@ -331,32 +369,44 @@ local function buildGui()
     bubble.Parent = gui
     Instance.new("UICorner", bubble).CornerRadius = UDim.new(1, 0)
 
-    hideBtn.MouseButton1Click:Connect(function()
+    bindTap(hideBtn, function()
         main.Visible = false
         bubble.Visible = true
     end)
-    bubble.MouseButton1Click:Connect(function()
+    bindTap(bubble, function()
         main.Visible = true
         bubble.Visible = false
     end)
 
     -- 拖动（触摸 + 鼠标）
     local dragging, dragStart, startPos = false, nil, nil
+
+    -- 点是否落在某个 GUI 的矩形范围内
+    local function insideGui(o, p)
+        if not (o and p) then return false end
+        local a, s = o.AbsolutePosition, o.AbsoluteSize
+        return p.X >= a.X and p.X <= a.X + s.X and p.Y >= a.Y and p.Y <= a.Y + s.Y
+    end
+
     local function beginDrag(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-            or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            dragStart = input.Position
-            startPos = main.Position
-            input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then
-                    dragging = false
-                end
-            end)
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1
+            and input.UserInputType ~= Enum.UserInputType.Touch then return end
+        -- 日志区/按钮区里开始的滑动不算拖动（留给滚动和点击）
+        if insideGui(logScroll, input.Position) or insideGui(btnRow, input.Position) then
+            return
         end
+        dragging = true
+        dragStart = input.Position
+        startPos = main.Position
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
     end
     title.InputBegan:Connect(beginDrag)
     titleText.InputBegan:Connect(beginDrag)
+    main.InputBegan:Connect(beginDrag)       -- 拖面板空白/日志区也能移动
     title.InputChanged:Connect(function(input)
         if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
             or input.UserInputType == Enum.UserInputType.Touch) then
@@ -425,7 +475,7 @@ local function slowScan()
         local ok, screens = pcall(function() return r:GetChildren() end)
         if ok then
             for _, sg in ipairs(screens) do
-                if sg:IsA("ScreenGui") and not ROOT_SKIP[sg.Name] then
+                if sg:IsA("ScreenGui") and not shouldSkipRoot(sg.Name) then
                     local enabled = true
                     pcall(function() enabled = sg.Enabled end)
                     if enabled then
@@ -459,6 +509,29 @@ UIS.InputBegan:Connect(function(input)
             end
         end)
     end
+
+    -- 3D 世界里的目标：有些 QTE 不在屏幕上，而是 3D 里的 BillboardGui/SurfaceGui/ClickDetector
+    pcall(function()
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        local ray = cam:ViewportPointToRay(pos.X, pos.Y)
+        local params = RaycastParams.new()
+        pcall(function() params.FilterType = Enum.RaycastFilterType.Exclude end)
+        pcall(function() params.FilterType = Enum.RaycastFilterType.Blacklist end)
+        params.FilterDescendantsInstances = { lp.Character }
+        local hit = workspace:Raycast(ray.Origin, ray.Direction * 600, params)
+        if not (hit and hit.Instance) then return end
+        local inst = hit.Instance
+        for _, cls in ipairs({ "BillboardGui", "SurfaceGui", "ClickDetector", "ProximityPrompt" }) do
+            local found = inst:FindFirstChildOfClass(cls)
+            if not found and inst.Parent then
+                found = inst.Parent:FindFirstChildOfClass(cls)
+            end
+            if found then
+                addLine(string.format("你点到了3D > %s 上有 %s", inst:GetFullName(), found:GetFullName()))
+            end
+        end
+    end)
 end)
 
 -- ==================== 侦查4：Remote 调用（默认关） ====================
@@ -498,14 +571,24 @@ pcall(function()
     setreadonly(mt, true)
 end)
 
--- ==================== 侦查5：全量打印 ====================
+-- ==================== 侦查5：3D 世界里的 UI（BillboardGui/SurfaceGui） ====================
+pcall(function()
+    workspace.DescendantAdded:Connect(function(o)
+        local cls = o.ClassName
+        if cls == "BillboardGui" or cls == "SurfaceGui" then
+            addLine("世界UI > " .. o:GetFullName())
+        end
+    end)
+end)
+
+-- ==================== 侦查6：全量打印 ====================
 dumpAll = function()
     addLine("====== 当前可见 GUI ======")
     local list = {}
     for _, r in ipairs(getRoots()) do
         pcall(function()
             for _, sg in ipairs(r:GetChildren()) do
-                if sg:IsA("ScreenGui") and not ROOT_SKIP[sg.Name] then
+                if sg:IsA("ScreenGui") and not shouldSkipRoot(sg.Name) then
                     for _, o in ipairs(sg:GetDescendants()) do
                         if o:IsA("GuiObject") and o.Visible then
                             local sz = o.AbsoluteSize
@@ -608,6 +691,47 @@ task.spawn(function()
     end
 end)
 
-addLine("====== QTE 侦查已启动（低占用版）=====")
-addLine("先点「清空」，手动做一次 QTE，再点「复制日志」发我")
+-- ==================== 启动自检（告诉我们到底在看哪里） ====================
+local function selfCheck()
+    local names = {}
+    pcall(function()
+        for _, sg in ipairs(pg:GetChildren()) do
+            if sg:IsA("ScreenGui") then
+                local en = true
+                pcall(function() en = sg.Enabled end)
+                table.insert(names, sg.Name .. (en and "✓" or "✗"))
+            end
+        end
+    end)
+    addLine("自检 PlayerGui 有 " .. #names .. " 个 ScreenGui："
+        .. (#names > 0 and table.concat(names, ", ") or "空"), true)
+
+    local cnt = 0
+    pcall(function() cnt = #pg:GetDescendants() end)
+    addLine("自检 PlayerGui 元素总数：" .. cnt, true)
+
+    local cg
+    pcall(function() cg = game:GetService("CoreGui") end)
+    if not cg then
+        addLine("自检 CoreGui：取不到 ❌（执行器权限不够，Roblox自身UI抓不了）", true)
+        return
+    end
+    local list
+    local ok = pcall(function() list = cg:GetChildren() end)
+    if not ok or not list then
+        addLine("自检 CoreGui：不可读 ❌（执行器权限不够，Roblox自身UI抓不了）", true)
+        return
+    end
+    local top = {}
+    for _, c in ipairs(list) do table.insert(top, c.Name) end
+    addLine("自检 CoreGui：可读 ✅ 顶层 " .. #list .. " 个：" .. table.concat(top, ", "), true)
+end
+
+task.spawn(function()
+    task.wait(0.3)
+    pcall(selfCheck)
+    addLine("====== QTE 侦查已启动 ======", true)
+    addLine("先点「清空」，手动做一次 QTE，再点「复制日志」发我", true)
+end)
+
 notify("QTE侦查已启动", "面板在左上角，拖标题栏可移动")
