@@ -12,6 +12,9 @@
 --   8. 重复执行不再失效 → 重新加载会先清理上一个实例
 --   9. 手机上 FOV 圈跑到左上角 → 手机自动改用屏幕中心（手机没有鼠标，
 --      GetMouseLocation 返回的是上次触摸位置，没碰屏幕就是 0,0），并加屏幕触发按钮
+--  10. 手机上 FOV 圈偏下一点 → ViewportSize 是「视口」尺寸（不含顶部状态栏），
+--      但手机 3D 画面铺满整屏，视觉中心是屏幕中心，两者差半个状态栏高度。
+--      按 GuiService:GetGuiInset() 补上这半个高度，圈和自瞄用同一个点
 
 local Tab = (getgenv().Tabs and getgenv().Tabs.AimbotTab) or getgenv().SutureAimbotTab
 if not Tab then
@@ -22,6 +25,7 @@ end
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
+local GuiService = game:GetService("GuiService")
 
 local lp = Players.LocalPlayer
 local mousemoverel = getgenv().mousemoverel or mousemoverel
@@ -39,6 +43,18 @@ local function detectDevice()
 	return "电脑"
 end
 local AUTO_DEVICE = detectDevice()
+
+-- 顶部状态栏（GUI inset）高度。ViewportSize 和 ScreenGui(IgnoreGuiInset=false)
+-- 用的都是「视口坐标」，原点在状态栏下面，而手机的 3D 画面是铺满整屏的，
+-- 视觉中心是屏幕中心 —— 两者差半个状态栏高度，不补的话手机 FOV 圈会偏下。
+local INSET_TL, INSET_BR = Vector2.new(0, 0), Vector2.new(0, 0)
+do
+	local ok, tl, br = pcall(function() return GuiService:GetGuiInset() end)
+	if ok then
+		if tl and tl.X and tl.Y then INSET_TL = tl end
+		if br and br.X and br.Y then INSET_BR = br end
+	end
+end
 
 -- ============ 清理上一个实例（重复执行脚本时不叠加）============
 local BIND_NAME = "SutureAimbotStep"
@@ -89,11 +105,16 @@ local function isMobileNow()
 end
 
 -- 电脑：准心 = 鼠标位置（有些游戏有黑边/自定义准心，屏幕中心不是准心）
--- 手机：没有鼠标，屏幕上又没有准心，瞄准点就是屏幕正中心
+-- 手机：没有鼠标，瞄准点就是「屏幕正中心」。
+--   注意不能直接用 ViewportSize/2 —— 那是视口中心，比屏幕中心低半个状态栏高度，
+--   圈会看起来偏下。FOV 圈和自瞄用的是同一个点，保证圈画的就是真正锁定的范围。
 local function aimCenter(cam)
 	if isMobileNow() then
 		local vp = cam.ViewportSize
-		return Vector2.new(vp.X / 2, vp.Y / 2)
+		local screenW = vp.X + INSET_TL.X + INSET_BR.X
+		local screenH = vp.Y + INSET_TL.Y + INSET_BR.Y
+		-- 换回视口坐标（ScreenGui 的 IgnoreGuiInset = false，原点和视口对齐）
+		return Vector2.new(screenW / 2 - INSET_TL.X, screenH / 2 - INSET_TL.Y)
 	end
 	return UIS:GetMouseLocation()
 end
