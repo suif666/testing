@@ -10,6 +10,8 @@
 --   6. 有些游戏没效果 → 部位加 R6/R15 回退链，没有 "Head" 的骨架也能瞄
 --   7. 有些游戏没效果 → FOV 圆心改成鼠标位置（有黑边/自定义准心时屏幕中心不是准心）
 --   8. 重复执行不再失效 → 重新加载会先清理上一个实例
+--   9. 手机上 FOV 圈跑到左上角 → 手机自动改用屏幕中心（手机没有鼠标，
+--      GetMouseLocation 返回的是上次触摸位置，没碰屏幕就是 0,0），并加屏幕触发按钮
 
 local Tab = (getgenv().Tabs and getgenv().Tabs.AimbotTab) or getgenv().SutureAimbotTab
 if not Tab then
@@ -26,6 +28,18 @@ local mousemoverel = getgenv().mousemoverel or mousemoverel
 
 getgenv().__SUTURE_AIMBOT_LOADED = true
 
+-- ============ 设备检测（电脑 / 手机）============
+-- 手机上 UserInputService:GetMouseLocation() 返回的是「上一次触摸的位置」，
+-- 没碰屏幕时是 (0,0)，所以 FOV 圈会跑到左上角 —— 手机上必须改用屏幕中心。
+-- 判断标准：有触摸但没鼠标 = 手机/平板（触摸屏笔记本有鼠标，仍算电脑）。
+local function detectDevice()
+	if UIS.TouchEnabled and not UIS.MouseEnabled then
+		return "手机"
+	end
+	return "电脑"
+end
+local AUTO_DEVICE = detectDevice()
+
 -- ============ 清理上一个实例（重复执行脚本时不叠加）============
 local BIND_NAME = "SutureAimbotStep"
 pcall(function() RunService:UnbindFromRenderStep(BIND_NAME) end)
@@ -37,9 +51,11 @@ end
 -- ============ 配置 ============
 local defaultAimbot = {
 	Enabled = false,
+	Device = "自动",             -- 自动 / 电脑 / 手机
 	Mode = "自动",              -- 自动 / 相机 / 鼠标
 	HoldKey = "无（一直自瞄）",
 	HoldMode = true,            -- true=按住  false=按一下切换
+	HoldButton = (AUTO_DEVICE == "手机"),   -- 屏幕按钮触发（手机默认开）
 	ShowFov = false,
 	Fov = 200,
 	MaxDistance = 1000,
@@ -63,6 +79,24 @@ end
 local Aimbot = getgenv().SutureAimbot
 -- 兼容 v1 遗留字段
 if Aimbot.Priority == nil then Aimbot.Priority = "准心优先" end
+
+-- ============ 当前设备 & 准心位置 ============
+local function isMobileNow()
+	local d = Aimbot.Device
+	if d == "手机" then return true end
+	if d == "电脑" then return false end
+	return AUTO_DEVICE == "手机"
+end
+
+-- 电脑：准心 = 鼠标位置（有些游戏有黑边/自定义准心，屏幕中心不是准心）
+-- 手机：没有鼠标，屏幕上又没有准心，瞄准点就是屏幕正中心
+local function aimCenter(cam)
+	if isMobileNow() then
+		local vp = cam.ViewportSize
+		return Vector2.new(vp.X / 2, vp.Y / 2)
+	end
+	return UIS:GetMouseLocation()
+end
 
 -- ============ FOV 圈 ============
 local fovGui = Instance.new("ScreenGui")
@@ -206,12 +240,12 @@ local function scoreOf(entry, cam)
 		return (cam.CFrame.Position - part.Position).Magnitude
 	end
 	local pos = cam:WorldToViewportPoint(part.Position)
-	local center = UIS:GetMouseLocation()
+	local center = aimCenter(cam)
 	return (Vector2.new(pos.X, pos.Y) - center).Magnitude
 end
 
 local function getAimTarget(cam)
-	local center = UIS:GetMouseLocation()
+	local center = aimCenter(cam)
 	local myChar = lp.Character
 	local best, bestScore = nil, math.huge
 
@@ -303,11 +337,88 @@ local KEY_MAP = {
 }
 local holding = false
 local toggled = false
+local btnHeld = false        -- 手机屏幕按钮是否按住
 
 local function keyDown()
+	if Aimbot.HoldButton then
+		-- 开了屏幕按钮就以按钮为准（手机上本来也没键盘可按）
+		if Aimbot.HoldMode then return btnHeld end
+		return toggled
+	end
 	if Aimbot.HoldKey == "无（一直自瞄）" then return true end
 	if Aimbot.HoldMode then return holding end
 	return toggled
+end
+
+-- 手机用的触发按钮（可拖动，不挡视线）
+local touchBtn = Instance.new("TextButton")
+touchBtn.Name = "AimbotTrigger"
+touchBtn.Size = UDim2.fromOffset(64, 64)
+touchBtn.Position = UDim2.new(1, -90, 1, -170)
+touchBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 34)
+touchBtn.BackgroundTransparency = 0.35
+touchBtn.Text = "自瞄"
+touchBtn.TextSize = 18
+touchBtn.TextColor3 = Color3.fromRGB(235, 235, 235)
+touchBtn.Font = Enum.Font.SourceSansBold
+touchBtn.AutoButtonColor = false
+touchBtn.Visible = false
+touchBtn.Active = true
+touchBtn.Parent = fovGui
+Instance.new("UICorner", touchBtn).CornerRadius = UDim.new(1, 0)
+local touchStroke = Instance.new("UIStroke")
+touchStroke.Thickness = 2
+touchStroke.Color = Color3.fromRGB(255, 255, 255)
+touchStroke.Transparency = 0.5
+touchStroke.Parent = touchBtn
+
+local btnConns = {}
+local function bindBtn(evt, fn)
+	btnConns[#btnConns + 1] = evt:Connect(fn)
+end
+bindBtn(touchBtn.InputBegan, function(input)
+	if input.UserInputType == Enum.UserInputType.Touch
+		or input.UserInputType == Enum.UserInputType.MouseButton1 then
+		btnHeld = true
+		touchBtn.BackgroundTransparency = 0.1
+		touchStroke.Transparency = 0.1
+		if not Aimbot.HoldMode then toggled = not toggled end
+	end
+end)
+bindBtn(touchBtn.InputEnded, function(input)
+	if input.UserInputType == Enum.UserInputType.Touch
+		or input.UserInputType == Enum.UserInputType.MouseButton1 then
+		btnHeld = false
+		touchBtn.BackgroundTransparency = 0.35
+		touchStroke.Transparency = 0.5
+	end
+end)
+-- 拖动按钮（长按拖动改位置）
+do
+	local dragging, dragStart, startPos = false, nil, nil
+	bindBtn(touchBtn.InputBegan, function(input)
+		if input.UserInputType == Enum.UserInputType.Touch
+			or input.UserInputType == Enum.UserInputType.MouseButton1 then
+			dragging = true
+			dragStart = input.Position
+			startPos = touchBtn.Position
+		end
+	end)
+	bindBtn(touchBtn.InputChanged, function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.Touch
+			or input.UserInputType == Enum.UserInputType.MouseMovement) then
+			local d = input.Position - dragStart
+			-- 拖动超过 8 像素才算拖，避免误触时按钮乱跑
+			if math.abs(d.X) > 8 or math.abs(d.Y) > 8 then
+				touchBtn.Position = UDim2.new(
+					startPos.X.Scale, startPos.X.Offset + d.X,
+					startPos.Y.Scale, startPos.Y.Offset + d.Y)
+			end
+		end
+	end)
+	bindBtn(touchBtn.InputEnded, function()
+		dragging = false
+	end)
 end
 
 -- ============ 主循环 ============
@@ -315,9 +426,24 @@ local Step = function(dt)
 	local cam = workspace.CurrentCamera
 	if not cam then return end
 
-	-- FOV 圈（跟着准心走）
+	-- 手机触发按钮显隐
+	local wantBtn = Aimbot.HoldButton and true or false
+	if touchBtn.Visible ~= wantBtn then
+		touchBtn.Visible = wantBtn
+		if not wantBtn then
+			btnHeld = false
+			touchBtn.BackgroundTransparency = 0.35
+			touchStroke.Transparency = 0.5
+		end
+	end
+	if wantBtn then
+		local on = keyDown()
+		touchStroke.Color = on and Color3.fromRGB(255, 210, 90) or Color3.fromRGB(255, 255, 255)
+	end
+
+	-- FOV 圈（电脑跟鼠标，手机固定在屏幕中心）
 	if Aimbot.ShowFov then
-		local m = UIS:GetMouseLocation()
+		local m = aimCenter(cam)
 		fovRing.Visible = true
 		fovRing.Size = UDim2.fromOffset(Aimbot.Fov * 2, Aimbot.Fov * 2)
 		fovRing.Position = UDim2.new(0, m.X, 0, m.Y)
@@ -345,12 +471,18 @@ local Step = function(dt)
 	-- 决定这一帧用哪种模式
 	local mode = Aimbot.Mode
 	if mode == "自动" then
-		mode = (mousemoverel and autoSwitched) and "鼠标" or "相机"
+		-- 手机不参与自动切鼠标：手机没有 mousemoverel，切过去等于自瞄失灵
+		mode = (mousemoverel and not isMobileNow() and autoSwitched) and "鼠标" or "相机"
+	elseif mode == "鼠标" and (isMobileNow() or not mousemoverel) then
+		-- 手机上手动选了「鼠标」也没用，直接退回相机模式，别静默失效
+		mode = "相机"
 	end
 
 	-- 帧首检查：游戏有没有把我们「上一帧」设的朝向掰回去
 	-- （必须在这里查，不能在设完相机之后查——那时候刚写进去，永远是「没被抢」）
-	if mode == "相机" and Aimbot.Mode == "自动" and not autoSwitched and lastSetCF then
+	-- 手机上不检测：手机没有 mousemoverel，检测出来也没得切
+	if mode == "相机" and Aimbot.Mode == "自动" and not isMobileNow()
+		and not autoSwitched and lastSetCF then
 		if cameraIsFighting(cam) then
 			cameraFightFrames = cameraFightFrames + 1
 			if cameraFightFrames > 15 then
@@ -425,6 +557,7 @@ bindInput(UIS.InputEnded, function(input)
 end)
 bindInput(lp.CharacterAdded, function()
 	holding = false
+	btnHeld = false
 	locked = nil
 	lastSetCF = nil
 end)
@@ -433,6 +566,7 @@ end)
 getgenv().__SUTURE_AIMBOT_CLEANUP = function()
 	pcall(function() RunService:UnbindFromRenderStep(BIND_NAME) end)
 	for _, c in ipairs(inputConns) do pcall(function() c:Disconnect() end) end
+	for _, c in ipairs(btnConns) do pcall(function() c:Disconnect() end) end
 	unlockSensitivity()
 	pcall(function() fovGui:Destroy() end)
 end
@@ -448,8 +582,24 @@ local uiOk, uiErr = pcall(function()
 	})
 
 	Tab:Dropdown({
+		Title = "设备",
+		Desc = "当前识别为「" .. AUTO_DEVICE .. "」。自动识别可能出错（蓝牙键鼠、模拟器），错了就手动选",
+		Values = { "自动", "电脑", "手机" },
+		Value = Aimbot.Device or "自动",
+		Callback = function(v) Aimbot.Device = v end
+	})
+
+	Tab:Toggle({
+		Title = "屏幕按钮触发",
+		Desc = "手机默认开：屏幕右下角一个「自瞄」圆钮，按住才自瞄（可拖动）。关掉就回到一直自瞄",
+		Type = "Checkbox",
+		Value = Aimbot.HoldButton or false,
+		Callback = function(s) Aimbot.HoldButton = s end
+	})
+
+	Tab:Dropdown({
 		Title = "瞄准模式",
-		Desc = "自动：先试相机，发现游戏接管了相机就自动切鼠标。有些游戏必须手动选「鼠标」",
+		Desc = "自动：先试相机，发现游戏接管了相机就自动切鼠标。手机上「鼠标」模式无效（没有 mousemoverel）",
 		Values = { "自动", "相机", "鼠标" },
 		Value = Aimbot.Mode or "自动",
 		Callback = function(v)
@@ -616,8 +766,10 @@ local uiOk, uiErr = pcall(function()
 		Title = "自瞄 v2 说明",
 		Desc = "抖动修了什么：锁定时把鼠标灵敏度设 0（游戏相机收不到输入，我们写的朝向才留得住）、" ..
 			"渲染绑在相机之后执行、锁定后不每帧换目标、平滑改成帧率无关。\n" ..
-			"有些游戏没效果：那种游戏有自定义相机，把「瞄准模式」手动改成「鼠标」。\n" ..
-			"打不中：先调「瞄准点上下偏移」，再调「预判」和「延迟补偿」。"
+			"有些游戏没效果：那种游戏有自定义相机，把「瞄准模式」手动改成「鼠标」（手机上没有这个模式）。\n" ..
+			"打不中：先调「瞄准点上下偏移」，再调「预判」和「延迟补偿」。\n" ..
+			"手机：FOV 圈固定在屏幕中心（手机没有鼠标，GetMouseLocation 拿到的是上次触摸的位置，" ..
+			"不修会跑到左上角）；想按住才自瞄就开「屏幕按钮触发」。"
 	})
 end)
 
