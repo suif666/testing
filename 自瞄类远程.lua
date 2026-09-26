@@ -12,9 +12,9 @@
 --   8. 重复执行不再失效 → 重新加载会先清理上一个实例
 --   9. 手机上 FOV 圈跑到左上角 → 手机自动改用屏幕中心（手机没有鼠标，
 --      GetMouseLocation 返回的是上次触摸位置，没碰屏幕就是 0,0），并加屏幕触发按钮
---  10. 手机上 FOV 圈偏下一点 → ViewportSize 是「视口」尺寸（不含顶部状态栏），
---      但手机 3D 画面铺满整屏，视觉中心是屏幕中心，两者差半个状态栏高度。
---      按 GuiService:GetGuiInset() 补上这半个高度，圈和自瞄用同一个点
+--  10. 手机上 FOV 圈偏下 → 圈必须用「IgnoreGuiInset = true + 百分比居中」
+--      （v1 的写法）。改成 IgnoreGuiInset = false 再拿像素偏移去摆，是在
+--      「视口坐标」里画，起点比屏幕顶部低一个状态栏，怎么补 inset 都还是偏
 
 local Tab = (getgenv().Tabs and getgenv().Tabs.AimbotTab) or getgenv().SutureAimbotTab
 if not Tab then
@@ -105,25 +105,23 @@ local function isMobileNow()
 end
 
 -- 电脑：准心 = 鼠标位置（有些游戏有黑边/自定义准心，屏幕中心不是准心）
--- 手机：没有鼠标，瞄准点就是「屏幕正中心」。
---   注意不能直接用 ViewportSize/2 —— 那是视口中心，比屏幕中心低半个状态栏高度，
---   圈会看起来偏下。FOV 圈和自瞄用的是同一个点，保证圈画的就是真正锁定的范围。
+-- 手机：没有鼠标，瞄准点就是视口正中心（和 v1 一致，实测自瞄是准的）
 local function aimCenter(cam)
 	if isMobileNow() then
 		local vp = cam.ViewportSize
-		local screenW = vp.X + INSET_TL.X + INSET_BR.X
-		local screenH = vp.Y + INSET_TL.Y + INSET_BR.Y
-		-- 换回视口坐标（ScreenGui 的 IgnoreGuiInset = false，原点和视口对齐）
-		return Vector2.new(screenW / 2 - INSET_TL.X, screenH / 2 - INSET_TL.Y)
+		return Vector2.new(vp.X / 2, vp.Y / 2)
 	end
 	return UIS:GetMouseLocation()
 end
 
 -- ============ FOV 圈 ============
+-- IgnoreGuiInset = true 是 v1 就用的写法，配上「百分比居中」位置，
+-- 圈才落在屏幕正中心。改成 false 再加像素偏移会在「视口坐标」里画，
+-- 比屏幕中心低半个到一个状态栏高度 —— 这就是之前一直偏下的原因。
 local fovGui = Instance.new("ScreenGui")
 fovGui.Name = "AimbotFOV"
 fovGui.ResetOnSpawn = false
-fovGui.IgnoreGuiInset = false
+fovGui.IgnoreGuiInset = true
 do
 	local ok, p = pcall(gethui)
 	fovGui.Parent = ok and p or game:GetService("CoreGui")
@@ -462,12 +460,17 @@ local Step = function(dt)
 		touchStroke.Color = on and Color3.fromRGB(255, 210, 90) or Color3.fromRGB(255, 255, 255)
 	end
 
-	-- FOV 圈（电脑跟鼠标，手机固定在屏幕中心）
+	-- FOV 圈（手机固定在屏幕正中；电脑跟鼠标，鼠标是视口坐标要补上状态栏）
 	if Aimbot.ShowFov then
-		local m = aimCenter(cam)
 		fovRing.Visible = true
 		fovRing.Size = UDim2.fromOffset(Aimbot.Fov * 2, Aimbot.Fov * 2)
-		fovRing.Position = UDim2.new(0, m.X, 0, m.Y)
+		if isMobileNow() then
+			-- 纯百分比居中：不管状态栏多高都正好在屏幕中心
+			fovRing.Position = UDim2.new(0.5, 0, 0.5, 0)
+		else
+			local m = aimCenter(cam)
+			fovRing.Position = UDim2.new(0, m.X, 0, m.Y + INSET_TL.Y)
+		end
 		if locked and locked.Player then
 			fovStroke.Color = Color3.fromRGB(255, 210, 90)
 			lockLabel.Text = "锁定: " .. locked.Player.Name
