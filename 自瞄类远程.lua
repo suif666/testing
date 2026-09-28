@@ -18,6 +18,11 @@
 --      对策：转角色时 Y 分量抹成 0，只修水平偏航；转相机时钳制 pitch
 --   6. 准星已经在目标身上仍继续微调 → 高频细抖
 --      对策：死区，屏幕像素误差小于阈值就不动
+--   7. 锁上以后拉不开（吸附力度滑块无效）
+--      旧版吸附力度只是把速度乘 0.5~2 倍，而平滑度是 1~30 倍，被淹没；且无论调多少，
+--      瞄准最终都会完全收敛到目标身上，所以必然被拽回去。
+--      对策：吸附力度改成真正的强度混合（0=不吸）；再加「跟手程度」，
+--            检测到玩家自己在转视角就把自瞄压下去，松手恢复。
 --
 -- ── 保留 v1 的全部选项与默认值，设置不会丢（getgenv().SutureAimbot）──
 -- ── 回退：存档/自瞄/ 里有历史版本 ──
@@ -57,6 +62,7 @@ local defaultAimbot = {
 	-- v3 新增
 	Method = "转角色（推荐）",   -- 转角色 / 转相机
 	LockMouse = false,          -- 转相机模式下是否冻结鼠标视角（默认关：靠渲染优先级就够了）
+	PullAway = 70,              -- 玩家自己转视角时，自瞄减弱多少 %（跟手程度）
 	LockTime = 0.35,            -- 锁定后多久才允许换目标
 	SwitchGain = 30,            -- 新目标要比当前优多少 % 才换
 	Deadzone = 6,               -- 屏幕像素死区
@@ -109,6 +115,10 @@ local lock = {
 	diedConn = nil,
 }
 local savedMouseSensitivity = nil   -- 转相机模式要还原的鼠标灵敏度
+-- 玩家输入检测：不依赖鼠标/触摸事件，任何设备都能用
+-- 原理：记下我们上一帧写下的相机朝向，下一帧相机模块的输出与之的差值，就是玩家自己转的那部分角度
+local lookRef = nil
+local inputUntil = 0
 
 local PART_POOL = { "Head", "HumanoidRootPart", "UpperTorso", "Torso" }
 
@@ -333,6 +343,20 @@ local function aimLoop(dt)
 	local cam = workspace.CurrentCamera
 	if not cam then return end
 
+	-- 玩家是否正在自己转视角
+	local now = tick()
+	local camLook = cam.CFrame.LookVector
+	if lookRef then
+		local dot = lookRef:Dot(camLook)
+		if dot > 1 then dot = 1 elseif dot < -1 then dot = -1 end
+		local movedDeg = math.deg(math.acos(dot))
+		-- 阈值 0.3 度/帧（60fps 约 18 度/秒）：正常拖视角会超，相机模块自身的惯性不会
+		if movedDeg > 0.3 then
+			inputUntil = now + 0.15
+		end
+	end
+	lookRef = camLook   -- 默认基线；若本帧稍后写了相机，末尾会再更新一次
+
 	-- FOV 圈：只跟「显示FOV圈」绑定
 	if Aimbot.ShowFov then
 		pcall(function()
@@ -395,9 +419,21 @@ local function aimLoop(dt)
 
 	-- 帧率无关的指数逼近：60Hz 和 240Hz 收敛速度一致，且永不过冲
 	local speed = 1 + (tonumber(Aimbot.Smooth) or 0.8) * 29
-	local rate = speed * (0.5 + (tonumber(Aimbot.LockStrength) or 0.5) * 1.5)
-	local alpha = 1 - math.exp(-rate * math.clamp(dt, 0, 0.1))
+	local alpha = 1 - math.exp(-speed * math.clamp(dt, 0, 0.1))
+
+	-- 吸附力度 = 真正的强度混合（旧版只是把速度乘 0.5~2 倍，被平滑度淹没了，等于没用）
+	--   0 = 完全不吸（自瞄失效），1 = 全速锁（配合平滑度）
+	local strength = math.clamp(tonumber(Aimbot.LockStrength) or 0.5, 0, 1)
+	alpha = alpha * strength
+
+	-- 跟手：玩家自己在转视角时把自瞄压下去，松手后自动恢复
+	if now < inputUntil then
+		local pull = math.clamp((tonumber(Aimbot.PullAway) or 70) / 100, 0, 1)
+		alpha = alpha * (1 - pull)
+	end
+
 	if alpha > 1 then alpha = 1 end
+	if alpha <= 0 then return end
 
 	local method = Aimbot.Method or "转角色（推荐）"
 	if method == "转角色（推荐）" then
@@ -435,6 +471,8 @@ local function aimLoop(dt)
 		pcall(function()
 			cam.CFrame = cam.CFrame:Lerp(targetCF, alpha)
 		end)
+		-- 更新基线为我们刚写下的朝向：下一帧的差值就只剩玩家自己转的那部分
+		lookRef = cam.CFrame.LookVector
 	end
 end
 
@@ -596,11 +634,21 @@ local uiOk, uiErr = pcall(function()
 
 	Tab:Slider({
 		Title = "吸附力度",
-		Desc = "数值越大越难把准星从目标上拉开，越小越容易移开",
+		Desc = "自瞄的强度：0 = 完全不吸（等于关掉），10 = 全速锁死。拉不开准星就调小",
 		Step = 1,
 		Value = { Min = 0, Max = 10, Default = math.floor((Aimbot.LockStrength or 0.5) * 10) },
 		Callback = function(v)
 			Aimbot.LockStrength = (tonumber(v) or 5) / 10
+		end
+	})
+
+	Tab:Slider({
+		Title = "跟手程度(%)",
+		Desc = "你自己转视角时自瞄减弱多少：0 = 自瞄不让位（最难拉开），100 = 完全让位（最好拉）",
+		Step = 5,
+		Value = { Min = 0, Max = 100, Default = Aimbot.PullAway or 70 },
+		Callback = function(v)
+			Aimbot.PullAway = tonumber(v) or 70
 		end
 	})
 
