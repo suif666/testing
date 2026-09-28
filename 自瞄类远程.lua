@@ -18,11 +18,11 @@
 --      对策：转角色时 Y 分量抹成 0，只修水平偏航；转相机时钳制 pitch
 --   6. 准星已经在目标身上仍继续微调 → 高频细抖
 --      对策：死区，屏幕像素误差小于阈值就不动
---   7. 锁上以后拉不开（吸附力度滑块无效）
---      旧版吸附力度只是把速度乘 0.5~2 倍，而平滑度是 1~30 倍，被淹没；且无论调多少，
---      瞄准最终都会完全收敛到目标身上，所以必然被拽回去。
---      对策：吸附力度改成真正的强度混合（0=不吸）；再加「跟手程度」，
---            检测到玩家自己在转视角就把自瞄压下去，松手恢复。
+--   7. 手感不对（锁太死 / 又发飘不跟手）
+--      第一版吸附力度被平滑度淹没，等于没用；第二版把乘数叠了三层又默认让位 70%，
+--      静止时只剩 v1 的 1/20，手感发飘。
+--      对策：吸附力度恢复成唯一总开关（v1 的做法），它同时决定「静止时收敛多快」
+--            和「你自己拖视角时让多少」。默认 5 = 跟手，10 = 锁死，0 = 关掉。
 --   8. 「换目标门槛」旧版排序按优先级、判定却用另一套写死的距离分数，两者根本不一致，
 --      而且百分比是平方分数的相对比例，没法心算。现统一为「优劣分(0~100)」，
 --      跟着优先级走，门槛就是两个目标的分数差。
@@ -65,7 +65,6 @@ local defaultAimbot = {
 	-- v3 新增
 	Method = "转角色（推荐）",   -- 转角色 / 转相机
 	LockMouse = false,          -- 转相机模式下是否冻结鼠标视角（默认关：靠渲染优先级就够了）
-	PullAway = 70,              -- 玩家自己转视角时，自瞄减弱多少 %（跟手程度）
 	LockTime = 0.35,            -- 锁定后多久才允许换目标
 	SwitchGain = 30,            -- 新目标要比当前优多少 % 才换
 	Deadzone = 6,               -- 屏幕像素死区
@@ -361,7 +360,9 @@ local function aimLoop(dt)
 	local cam = workspace.CurrentCamera
 	if not cam then return end
 
-	-- 玩家是否正在自己转视角
+	-- 玩家是否正在自己转视角。
+	-- 基线 lookRef 始终取"相机模块自己的输出"，而不是我们写进去的值 ——
+	-- 因为相机模块不认我们的写入，会逐帧还原，用我们的值当基线会误判成玩家输入。
 	local now = tick()
 	local camLook = cam.CFrame.LookVector
 	if lookRef then
@@ -373,7 +374,7 @@ local function aimLoop(dt)
 			inputUntil = now + 0.15
 		end
 	end
-	lookRef = camLook   -- 默认基线；若本帧稍后写了相机，末尾会再更新一次
+	lookRef = camLook   -- 基线 = 本帧相机模块的输出（下一帧与之比较，差值即玩家输入）
 
 	-- FOV 圈：只跟「显示FOV圈」绑定
 	if Aimbot.ShowFov then
@@ -435,19 +436,27 @@ local function aimLoop(dt)
 		end
 	end
 
-	-- 帧率无关的指数逼近：60Hz 和 240Hz 收敛速度一致，且永不过冲
-	local speed = 1 + (tonumber(Aimbot.Smooth) or 0.8) * 29
-	local alpha = 1 - math.exp(-speed * math.clamp(dt, 0, 0.1))
+	-- ══ 手感：吸附力度是唯一的总开关（对齐 v1 的操作习惯）══
+	-- 吸附力度 0~10 → s = 0~1。它同时决定两件事，这就是 v1 的做法：
+	--   ① 静止时收敛多快   ② 你自己拖视角时它让多少
+	-- 默认 s=0.5 时的表现对齐 v1：静止约每帧吃 0.68 误差，拖动中约 0.41。
+	-- （v3.1 的错在于把乘数一层层叠起来，又给"跟手"默认 70% 让位，
+	--   结果静止时只剩 0.04，比 v1 弱 20 倍 → 手感发飘不跟手。）
+	local s = math.clamp(tonumber(Aimbot.LockStrength) or 0.5, 0, 1)
+	if s <= 0 then return end            -- 力度 0 = 完全不吸（等于关掉）
 
-	-- 吸附力度 = 真正的强度混合（旧版只是把速度乘 0.5~2 倍，被平滑度淹没了，等于没用）
-	--   0 = 完全不吸（自瞄失效），1 = 全速锁（配合平滑度）
-	local strength = math.clamp(tonumber(Aimbot.LockStrength) or 0.5, 0, 1)
-	alpha = alpha * strength
+	-- ① 基准速度：先定"60fps 下每帧吃掉多少误差"，再换算成与帧率无关的速率。
+	--    这样 60Hz 和 240Hz 时间常数一致，且只吃剩余误差的一部分 → 永不过冲。
+	local frameFrac = math.min(0.95, s * 1.6)
+	local rate = -60 * math.log(1 - frameFrac)
+	local alpha = 1 - math.exp(-rate * math.clamp(dt, 0, 0.1))
+	-- 平滑度只做细调：0.1 → ×0.325，1 → ×1
+	alpha = alpha * (0.25 + 0.75 * math.clamp(tonumber(Aimbot.Smooth) or 0.8, 0, 1))
 
-	-- 跟手：玩家自己在转视角时把自瞄压下去，松手后自动恢复
+	-- ② 拖动时让位：力度越大越不让（v1 里 LockStrength 就是这个作用）
+	--    力度 10 → 完全不让位；力度 5 → 让掉 40%；力度 2 → 让掉 64%
 	if now < inputUntil then
-		local pull = math.clamp((tonumber(Aimbot.PullAway) or 70) / 100, 0, 1)
-		alpha = alpha * (1 - pull)
+		alpha = alpha * (0.2 + 0.8 * s)
 	end
 
 	if alpha > 1 then alpha = 1 end
@@ -489,8 +498,11 @@ local function aimLoop(dt)
 		pcall(function()
 			cam.CFrame = cam.CFrame:Lerp(targetCF, alpha)
 		end)
-		-- 更新基线为我们刚写下的朝向：下一帧的差值就只剩玩家自己转的那部分
-		lookRef = cam.CFrame.LookVector
+		-- 注意：这里绝对不要更新 lookRef。
+		-- 游戏相机模块并不知道我们写过相机，它下一帧仍按自己的内部状态算，
+		-- 于是每帧都会把我们转的角度"还原"回去。若把 lookRef 设成我们写的值，
+		-- 下一帧就会把这个还原误判成"玩家在转视角" → 自瞄每帧主动让位 → 自己把自己掐虚。
+		-- 只对比相机模块自己前后两帧的输出，那才是纯粹的玩家输入。
 	end
 end
 
@@ -642,7 +654,7 @@ local uiOk, uiErr = pcall(function()
 
 	Tab:Slider({
 		Title = "平滑度",
-		Desc = "越低越平滑，1 = 瞬间转向（已改成帧率无关）",
+		Desc = "吸附力度之后的细调，一般保持默认即可。越低越柔和，1 = 最快（帧率无关）",
 		Step = 0.05,
 		Value = { Min = 0.1, Max = 1, Default = Aimbot.Smooth or 0.8 },
 		Callback = function(v)
@@ -652,21 +664,11 @@ local uiOk, uiErr = pcall(function()
 
 	Tab:Slider({
 		Title = "吸附力度",
-		Desc = "自瞄的强度：0 = 完全不吸（等于关掉），10 = 全速锁死。拉不开准星就调小",
+		Desc = "唯一的手感总开关：0 = 完全不吸，5 = 跟手（默认），10 = 锁死拉不动。拉不开准星就调小",
 		Step = 1,
 		Value = { Min = 0, Max = 10, Default = math.floor((Aimbot.LockStrength or 0.5) * 10) },
 		Callback = function(v)
 			Aimbot.LockStrength = (tonumber(v) or 5) / 10
-		end
-	})
-
-	Tab:Slider({
-		Title = "跟手程度(%)",
-		Desc = "你自己转视角时自瞄减弱多少：0 = 自瞄不让位（最难拉开），100 = 完全让位（最好拉）",
-		Step = 5,
-		Value = { Min = 0, Max = 100, Default = Aimbot.PullAway or 70 },
-		Callback = function(v)
-			Aimbot.PullAway = tonumber(v) or 70
 		end
 	})
 
