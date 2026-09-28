@@ -23,6 +23,9 @@
 --      瞄准最终都会完全收敛到目标身上，所以必然被拽回去。
 --      对策：吸附力度改成真正的强度混合（0=不吸）；再加「跟手程度」，
 --            检测到玩家自己在转视角就把自瞄压下去，松手恢复。
+--   8. 「换目标门槛」旧版排序按优先级、判定却用另一套写死的距离分数，两者根本不一致，
+--      而且百分比是平方分数的相对比例，没法心算。现统一为「优劣分(0~100)」，
+--      跟着优先级走，门槛就是两个目标的分数差。
 --
 -- ── 保留 v1 的全部选项与默认值，设置不会丢（getgenv().SutureAimbot）──
 -- ── 回退：存档/自瞄/ 里有历史版本 ──
@@ -155,11 +158,24 @@ local function isVisible(myChar, targetChar, partPos)
 	return hit.Transparency >= 0.9
 end
 
--- 评分：越小越好。屏幕距² 权重高，世界距² 权重低（参考 Moonlua 的加权）
-local function scoreOf(screenDist, worldDist, range)
-	local a = (screenDist / math.max(1, Aimbot.Fov)) ^ 2 * 1.55
-	local b = (worldDist / math.max(1, range)) ^ 2 * 0.35
-	return a + b
+-- 「优劣分」：0 ~ 100，越高越好。
+-- 关键：它跟着你选的「优先级」走，和挑选最佳目标用的是同一套标准，
+-- 这样「换目标门槛」才讲得清楚 —— 两个目标的分数差多少，就直接是门槛的比较对象。
+--   准心优先   ：离准星越近分越高（0 分 = 正好贴在 FOV 圈边上，100 分 = 准星正中心）
+--   距离优先   ：离你越近分越高（0 分 = 正好在最大距离，100 分 = 零距离）
+--   血量低优先 ：血越少分越高（0 分 = 满血，100 分 = 空血）
+local function qualityOf(screenDist, worldDist, hum)
+	local pri = Aimbot.Priority
+	if pri == "血量低优先" then
+		local maxH = 100
+		if hum and hum.MaxHealth and hum.MaxHealth > 0 then maxH = hum.MaxHealth end
+		local h = (hum and hum.Health) or maxH
+		return 100 * (1 - math.clamp(h / maxH, 0, 1))
+	elseif pri == "距离优先" then
+		return 100 * (1 - math.clamp(worldDist / math.max(1, Aimbot.MaxDistance), 0, 1))
+	else
+		return 100 * (1 - math.clamp(screenDist / math.max(1, Aimbot.Fov), 0, 1))
+	end
 end
 
 -- 刷新候选表（每 cacheLife 秒一次，不是每帧）
@@ -210,10 +226,9 @@ local function refreshCache()
 											hum = hum,
 											part = part,
 											screenDist = screenDist,
-											score = scoreOf(screenDist, worldDist, Aimbot.MaxDistance),
-											priority = (Aimbot.Priority == "血量低优先" and hum.Health)
-												or (Aimbot.Priority == "距离优先" and worldDist)
-												or screenDist,
+											worldDist = worldDist,
+											health = hum.Health,
+											quality = qualityOf(screenDist, worldDist, hum),
 										})
 									end
 								end
@@ -225,7 +240,10 @@ local function refreshCache()
 		end
 	end
 
-	table.sort(list, function(x, y) return x.priority < y.priority end)
+	table.sort(list, function(x, y)
+		if x.quality == y.quality then return x.screenDist < y.screenDist end
+		return x.quality > y.quality
+	end)
 	lock.cache = list
 end
 
@@ -301,12 +319,12 @@ local function pickTarget()
 		return current
 	end
 
-	-- 锁定期过了：新目标要优出 SwitchGain% 才换（迟滞，压住左右横跳）
-	-- 用 score 算相对优势：屏幕距²×1.55 + 世界距²×0.35，恒正且各优先级之间可比
+	-- 锁定期过了：新目标的优劣分要比当前目标高出「门槛」分才换
+	-- 例：门槛 20，当前目标 55 分，新目标 80 分 → 差 25 ≥ 20 → 换
+	--     门槛 20，当前目标 55 分，新目标 70 分 → 差 15 <  20 → 继续锁当前目标
 	local best = valid[1]
 	if best and best.char ~= current.char then
-		local cur = math.max(1e-3, current.score)
-		local gain = (cur - best.score) / cur * 100
+		local gain = best.quality - current.quality
 		if gain >= (tonumber(Aimbot.SwitchGain) or 30) then
 			return best
 		end
@@ -589,8 +607,8 @@ local uiOk, uiErr = pcall(function()
 	})
 
 	Tab:Slider({
-		Title = "换目标门槛(%)",
-		Desc = "新目标要比当前目标优出这么多才换。调大更稳，调小更跟手",
+		Title = "换目标门槛(分)",
+		Desc = "新目标要比当前目标「好」多少分才换（满分100）。0 = 有更好的就换；调大更黏更稳",
 		Step = 5,
 		Value = { Min = 0, Max = 100, Default = Aimbot.SwitchGain or 30 },
 		Callback = function(v)
