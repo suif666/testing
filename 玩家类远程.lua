@@ -284,11 +284,73 @@ local NOFALL_RAY = 6          -- 离地多少格内开始卸力
 local NOFALL_DANGER = -50     -- 下坠速度低于这个值才算危险下坠
 local NOFALL_SAFE = -20       -- 卸到的安全落地速度
 
+-- ---------- 第二层：PlatformStand 兜底 ----------
+-- 用户从其它脚本（XIAOXI付费版）找到的写法：
+--     Humanoid.StateChanged:Connect(function(old, new)
+--         if new == Enum.HumanoidStateType.Freefall then
+--             Humanoid.PlatformStand = true
+--             task.wait(0.1)
+--             Humanoid.PlatformStand = false
+--         end
+--     end)
+-- 原理跟上面那层完全不同：翻一下 PlatformStand 等于把 humanoid 的物理状态重置一次，
+-- 很多游戏据此就不再结算已经累积的下坠伤害。两层互补 ——
+-- 上面那层靠"往下打 6 格射线"，遇到悬空平台/移动地板/水流就打不到地面，会失效；
+-- 这层不依赖射线，任何情况都在。
+--
+-- 原写法有四个问题，这里都修掉：
+--   1. Humanoid 是【未定义的全局】—— 一执行就是 nil 索引报错，等于没加
+--   2. 连接从不断开、每开一次开关就叠一条 —— 开关 5 次就有 5 条同时在翻 PlatformStand
+--   3. 没有重生处理 —— 死一次就永久失效
+--   4. 关掉功能时不还原 PlatformStand —— 角色可能一直保持 PlatformStand 状态
+-- 另外加了防重入锁：0.1 秒内可能连续几次进入 Freefall，不加锁会自己跟自己抢。
+local noFallPsConn = nil
+local noFallPsHum = nil
+local noFallPsBusy = false
+
+local function noFallPsStop()
+    if noFallPsConn then
+        pcall(function() noFallPsConn:Disconnect() end)
+        noFallPsConn = nil
+    end
+    if noFallPsHum then
+        local h = noFallPsHum
+        noFallPsHum = nil
+        -- 只有还是同一个 humanoid 且还活着才还原，避免把重生后的新角色也翻一遍
+        pcall(function()
+            if h.Parent then h.PlatformStand = false end
+        end)
+    end
+    noFallPsBusy = false
+end
+
+local function noFallPsStart(hum)
+    noFallPsStop()
+    if not hum then return end
+    noFallPsHum = hum
+    noFallPsConn = hum.StateChanged:Connect(function(_, newState)
+        if newState ~= Enum.HumanoidStateType.Freefall then return end
+        if noFallPsBusy then return end
+        if not PlayerExtra.NoFallDamage then return end
+        if hum ~= noFallPsHum or not hum.Parent then return end
+        noFallPsBusy = true
+        pcall(function() hum.PlatformStand = true end)
+        task.wait(0.1)
+        pcall(function()
+            if hum == noFallPsHum and hum.Parent then
+                hum.PlatformStand = false
+            end
+        end)
+        noFallPsBusy = false
+    end)
+end
+
 local noFallConn = nil
 local noFallHum = nil
 local noFallRayParams = nil
 
 local function noFallStop()
+    noFallPsStop()
     if noFallConn then
         pcall(function() noFallConn:Disconnect() end)
         noFallConn = nil
@@ -341,6 +403,9 @@ local function applyNoFallDamage(on)
     pcall(function()
         hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
     end)
+
+    -- 第二层：PlatformStand 兜底（不依赖射线）
+    pcall(function() noFallPsStart(hum) end)
 
     noFallBuildParams(char)
 
@@ -533,7 +598,7 @@ local uiOk, uiErr = pcall(function()
 
     moveSec:Toggle({
         Title = "无伤坠落",
-        Desc = "下坠全程原速，离地 6 格内卸掉冲击速度 → 从源头不产生摔落伤害（不补血）",
+        Desc = "两层防护：① 下坠全程原速，离地 6 格内卸掉冲击速度 ② 进入 Freefall 时短暂 PlatformStand 重置状态（悬空平台/移动地板这种射线打不到地面的场合也有效）",
         Type = "Checkbox",
         Value = PlayerExtra.NoFallDamage or false,
         Callback = function(s)
