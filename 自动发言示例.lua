@@ -139,15 +139,40 @@ local uiOk, uiErr = pcall(function()
         end
     })
 
+    -- ★ 点一下直接开居中大面板（自带搜索/头像）
+    -- ★ 注册到全局刷新总线：任何脚本点「刷新玩家列表」都会刷这一个
+    do
+        local g = (getgenv and getgenv()) or _G
+        if type(g.__SUIF_BIGONLY) == "function" then
+            pcall(g.__SUIF_BIGONLY, TargetDropdown)
+        end
+        if type(g.__SUIF_REGISTER_PLAYER_DD) == "function" then
+            pcall(g.__SUIF_REGISTER_PLAYER_DD, TargetDropdown, function(dd)
+                rebuildList()
+                listKey = table.concat(playerNameList, ",")
+                if dd.Refresh then
+                    dd:Refresh(richValues(), nil, true)
+                else
+                    dd:SetValues(richValues())
+                end
+            end, "自动发言")
+        end
+    end
+
     updateList(true)
 
     -- ===== UI：发言设置 =====
     Tab:Button({
-        Title = "刷新玩家列表",
-        Desc = "手动刷新私聊目标列表（玩家进出会自动更新，列表异常时点这个）",
+        Title = "刷新玩家列表（同步全部）",
+        Desc = "刷新所有脚本里的玩家下拉框（甩飞 / 传送 / 发言 / 伪装都一起更新）",
         Icon = "refresh-cw",
         Callback = function()
-            updateList(true)
+            local g = (getgenv and getgenv()) or _G
+            if type(g.__SUIF_REFRESH_ALL_PLAYERS) == "function" then
+                pcall(g.__SUIF_REFRESH_ALL_PLAYERS)
+            else
+                updateList(true)
+            end
         end
     })
     Tab:Input({
