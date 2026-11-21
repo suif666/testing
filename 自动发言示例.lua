@@ -27,7 +27,8 @@ local selectedTarget = nil
 -- WindUI 下拉回调可能返回 table，统一解包成字符串
 local function unwrap(v)
     if typeof(v) == "table" then
-        return v.Value or v[1]
+        -- 富条目（{Title=..,Desc=..,Image=..}）优先取 Title
+        return v.Title or v.Value or v[1]
     end
     return v
 end
@@ -88,6 +89,22 @@ local uiOk, uiErr = pcall(function()
         end
     end
 
+    -- ★ 富玩家条目：头像 + 名字 + DisplayName · 血量（主脚本 __SUIF_RICH_PLAYERS 生成）
+    local function richValues()
+        local g = getgenv and getgenv() or _G
+        if type(g.__SUIF_RICH_PLAYERS) == "function" then
+            local ok, r = pcall(g.__SUIF_RICH_PLAYERS, { excludeLocal = true })
+            if ok and type(r) == "table" and #r > 0 then
+                return r
+            end
+        end
+        local out = {}
+        for _, n in ipairs(playerNameList) do
+            out[#out + 1] = n
+        end
+        return out
+    end
+
     local function updateList(force)
         -- 限流：3 秒内最多真正刷新一次，避免频繁重建下拉框导致卡顿
         local now = os.clock()
@@ -99,9 +116,10 @@ local uiOk, uiErr = pcall(function()
             lastListRefresh = now
             pcall(function()
                 if TargetDropdown.Refresh then
-                    TargetDropdown:Refresh(playerNameList, selectedName)
+                    -- Boreal 的 Refresh 第 2 参是新 Values、第 3 参才是保留选中
+                    TargetDropdown:Refresh(richValues(), nil, true)
                 else
-                    TargetDropdown:SetValues(playerNameList)
+                    TargetDropdown:SetValues(richValues())
                 end
             end)
         end
@@ -112,7 +130,7 @@ local uiOk, uiErr = pcall(function()
     TargetDropdown = Tab:Dropdown({
         Title = "选择玩家",
         Desc = "私聊对象；公屏发言时可忽略",
-        Values = playerNameList,
+        Values = richValues(),
         Value = playerNameList[1] or "无",
         Callback = function(v)
             v = unwrap(v)
