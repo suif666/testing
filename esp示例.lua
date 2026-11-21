@@ -309,10 +309,24 @@ workspace.DescendantAdded:Connect(function(obj)
     end
 end)
 
--- ===== 每帧更新 =====
+-- ===== 更新（80ms 闸门 ≈ 12Hz）=====
+-- ★ 原来每一帧都要遍历所有玩家/NPC 重刷 ESP 框（每个框一次 BillboardGui 属性写），
+--   全关着也照样每帧进回调。加闸门后中间帧只做一次时间比较就 return；
+--   ESP 框跟角色走，12Hz 完全看不出拖影。
+local espNextTick = 0
 RunService.RenderStepped:Connect(function()
+    local now = os.clock()
+    if now < espNextTick then return end
+    espNextTick = now + 0.08
     local cam = workspace.CurrentCamera
     if not cam then return end
+
+    -- 两项都关着：一次性清干净就退出，不再每 80ms 反复 clear
+    if not ESP.PlayerEnabled and not ESP.NpcEnabled then
+        if next(playerStates) ~= nil then clearPlayerESP() end
+        if next(npcStates) ~= nil then clearNpcESP() end
+        return
+    end
 
     -- 玩家（不绘制自己）
     if ESP.PlayerEnabled then
