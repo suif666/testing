@@ -80,13 +80,31 @@ local Aimbot = getgenv().SutureAimbot
 
 -- ============ FOV 圈（UI 版圆环）============
 -- 注意：必须 IgnoreGuiInset = true + 百分比居中，否则手机上会偏下（v1 踩过的坑）
-local fovGui = Instance.new("ScreenGui")
-fovGui.Name = "AimbotFOV"
-fovGui.ResetOnSpawn = false
-fovGui.IgnoreGuiInset = true
+-- ★ 统一隐藏容器（见 suif.lua 的 __SUIF_HIDDEN_GUI）
+local fovGui
 do
-	local ok, p = pcall(gethui)
-	fovGui.Parent = ok and p or game:GetService("CoreGui")
+    local g0 = (getgenv and getgenv()) or _G
+    if type(g0.__SUIF_HIDDEN_GUI) == "function" then
+        local ok, r = pcall(g0.__SUIF_HIDDEN_GUI, "AimbotFOV", 90)
+        if ok and r then fovGui = r end
+    end
+    if not fovGui then
+        fovGui = Instance.new("ScreenGui")
+        fovGui.Name = "AimbotFOV"
+        fovGui.ResetOnSpawn = false
+        fovGui.IgnoreGuiInset = true
+        fovGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+        local okH, h = pcall(function() return gethui and gethui() end)
+        if okH and h then
+            fovGui.Parent = h
+        else
+            local okC = pcall(function() fovGui.Parent = game:GetService("CoreGui") end)
+            if not okC then
+                fovGui.Parent = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+            end
+        end
+        if type(g0.__SUIF_HIDE_GUI) == "function" then pcall(g0.__SUIF_HIDE_GUI, fovGui) end
+    end
 end
 
 local fovRing = Instance.new("Frame")
