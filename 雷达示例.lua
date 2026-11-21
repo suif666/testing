@@ -361,10 +361,15 @@ local okOverlay, errOverlay = pcall(function()
 
     pcall(refreshFriends)
 
+    -- ★ 原来每 5 秒对**每个玩家**调一次 IsFriendsWith —— 那是真正的网络请求，
+    --   人一多就是周期性卡顿。改成：新玩家加入时才查，其余 30 秒对一次账。
+    Players.PlayerAdded:Connect(function()
+        task.delay(1, function() pcall(refreshFriends) end)
+    end)
     task.spawn(function()
         while true do
+            task.wait(30)
             pcall(refreshFriends)
-            task.wait(5)
         end
     end)
 
@@ -484,10 +489,15 @@ local okOverlay, errOverlay = pcall(function()
         end
     end
 
+    -- ★ 原来挂 Heartbeat：每帧都要进一次回调，且每帧重算所有 blip 的位置/旋转。
+    --   加 100ms 闸门（10Hz）—— 雷达图 10Hz 刷新完全够用。
+    local radarNextTick = 0
     RunService.Heartbeat:Connect(function()
-        if Settings.Enabled then
-            pcall(updateRadar)
-        end
+        if not Settings.Enabled then return end
+        local now = os.clock()
+        if now < radarNextTick then return end
+        radarNextTick = now + 0.1
+        pcall(updateRadar)
     end)
 
     applyPosition()
